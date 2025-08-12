@@ -44,9 +44,16 @@ symphonia = { version = "0.5", features = [
   "wav",
   "alac"
 ] }
-rustube = "0.6"
+rustube = { version = "0.6", default-features = false, features = [
+  "download",
+  "std",
+  "rustls-tls",
+] }
 toml = "0.9"
-rspotify = "0.15"
+rspotify = { version = "0.15", default-features = false, features = [
+  "client-reqwest",
+  "reqwest-rustls-tls",
+] }
 dotenvy = "0.15"
 
 [badges]
