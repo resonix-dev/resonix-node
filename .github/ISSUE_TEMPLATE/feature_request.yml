@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an idea for Resonix
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What use case or pain does this address?
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? API changes, UX, etc.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other approaches you considered
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

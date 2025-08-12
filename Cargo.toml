@@ -1,0 +1,39 @@
+[package]
+name = "resonix-node"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+bytes = "1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
+sysinfo = "0.37"
+dashmap = "6"
+regex = "1"
+url = "2"
+ctrlc = "3"
+bytemuck = "1.23.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tempfile = "3"
+symphonia = { version = "0.5", features = [
+  "aac",
+  "mp3",
+  "flac",
+  "vorbis",
+  "isomp4",
+  "ogg",
+  "mkv",
+  "wav",
+  "alac"
+] }
+rustube = "0.6"
+toml = "0.9"
+rspotify = "0.15"
