@@ -1,13 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use rspotify::{model::TrackId, prelude::BaseClient, ClientCredsSpotify, Credentials};
+use serde::Deserialize;
 use tokio::process::Command;
 use url::Url;
 
 use crate::config::EffectiveConfig;
 
 fn host(url: &str) -> Option<String> {
-    Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+    Url::parse(url).ok().and_then(|u| u.host_str().map(|h| h.to_lowercase()))
 }
 
 pub fn is_uri_allowed(cfg: &EffectiveConfig, uri: &str) -> bool {
@@ -35,10 +35,15 @@ pub fn needs_resolve(input: &str) -> bool {
 pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<String> {
     if let Some(h) = host(input) {
         if h.contains("youtube.com") || h == "youtu.be" {
-            if let Ok(path) = download_with_ytdlp_to_temp(cfg, input, &cfg.preferred_format, Some(".m4a")).await {
+            if let Ok(path) =
+                download_with_ytdlp_to_temp(cfg, input, &cfg.preferred_format, Some(".m4a")).await
+            {
                 return Ok(path);
             }
-            if let Ok(path) = download_with_ytdlp_to_temp(cfg, input, "bestaudio[ext=m4a]/bestaudio/best", Some(".m4a")).await {
+            if let Ok(path) =
+                download_with_ytdlp_to_temp(cfg, input, "bestaudio[ext=m4a]/bestaudio/best", Some(".m4a"))
+                    .await
+            {
                 return Ok(path);
             }
             anyhow::bail!("Failed to download YouTube audio");
@@ -48,16 +53,85 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
                 return Ok(path);
             }
             if let Ok(url) = run_yt_dlp(cfg, &["--no-playlist", "-g", input]).await {
-                if !url.is_empty() { return Ok(url); }
+                if !url.is_empty() {
+                    return Ok(url);
+                }
             }
             anyhow::bail!("Failed to resolve SoundCloud URL");
         }
         if h.contains("spotify.com") {
+            // Enforce presence of Spotify credentials when handling Spotify URLs
+            if cfg_spotify_creds(cfg).is_none() {
+                anyhow::bail!(
+                    "Spotify URL provided but credentials are missing. Provide SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET or configure them in Resonix.toml."
+                );
+            }
+            if let Some(url_track_id) = parse_spotify_track_id(input) {
+                if let Some((client_id, client_secret)) = cfg_spotify_creds(cfg) {
+                    if let Ok((title, artists)) =
+                        fetch_spotify_track_metadata(&client_id, &client_secret, &url_track_id).await
+                    {
+                        let artist_joined =
+                            if artists.is_empty() { String::new() } else { artists.join(", ") + " - " };
+                        let query = format!("ytsearch1:{}{}", artist_joined, title);
+                        if let Ok(path) =
+                            download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a"))
+                                .await
+                        {
+                            return Ok(path);
+                        }
+                        if let Ok(path) = download_with_ytdlp_to_temp(
+                            cfg,
+                            &query,
+                            "bestaudio[ext=m4a]/bestaudio/best",
+                            Some(".m4a"),
+                        )
+                        .await
+                        {
+                            return Ok(path);
+                        }
+                    }
+                }
+            }
+            // Fallback: Spotify oEmbed title
+            if let Ok(title) = fetch_spotify_oembed_title(input).await {
+                let query = format!("ytsearch1:{}", title);
+                if let Ok(path) =
+                    download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a")).await
+                {
+                    return Ok(path);
+                }
+                if let Ok(path) = download_with_ytdlp_to_temp(
+                    cfg,
+                    &query,
+                    "bestaudio[ext=m4a]/bestaudio/best",
+                    Some(".m4a"),
+                )
+                .await
+                {
+                    return Ok(path);
+                }
+            }
+
+            // Last resort fallback: yt-dlp -e
             if cfg.allow_spotify_title_search {
                 if let Ok(title) = run_yt_dlp(cfg, &["-e", input]).await {
                     let query = format!("ytsearch1:{}", title);
-                    if let Ok(path) = download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a")).await { return Ok(path); }
-                    if let Ok(path) = download_with_ytdlp_to_temp(cfg, &query, "bestaudio[ext=m4a]/bestaudio/best", Some(".m4a")).await { return Ok(path); }
+                    if let Ok(path) =
+                        download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a")).await
+                    {
+                        return Ok(path);
+                    }
+                    if let Ok(path) = download_with_ytdlp_to_temp(
+                        cfg,
+                        &query,
+                        "bestaudio[ext=m4a]/bestaudio/best",
+                        Some(".m4a"),
+                    )
+                    .await
+                    {
+                        return Ok(path);
+                    }
                 }
             }
             anyhow::bail!("Failed to resolve Spotify URL");
@@ -87,10 +161,17 @@ async fn run_yt_dlp(cfg: &EffectiveConfig, args: &[&str]) -> Result<String> {
     }
 }
 
-pub async fn download_with_ytdlp_to_temp(cfg: &EffectiveConfig, input: &str, format: &str, suffix: Option<&str>) -> Result<String> {
+pub async fn download_with_ytdlp_to_temp(
+    cfg: &EffectiveConfig,
+    input: &str,
+    format: &str,
+    suffix: Option<&str>,
+) -> Result<String> {
     let mut builder = tempfile::Builder::new();
     builder.prefix("resonix_");
-    if let Some(suf) = suffix { builder.suffix(suf); }
+    if let Some(suf) = suffix {
+        builder.suffix(suf);
+    }
     let file = builder.tempfile()?;
     let path = file.path().to_path_buf();
     drop(file);
@@ -107,7 +188,9 @@ pub async fn download_with_ytdlp_to_temp(cfg: &EffectiveConfig, input: &str, for
     }
 
     let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded file")?;
-    if meta.len() == 0 { anyhow::bail!("yt-dlp created empty file"); }
+    if meta.len() == 0 {
+        anyhow::bail!("yt-dlp created empty file");
+    }
     Ok(out_path)
 }
 
@@ -130,6 +213,76 @@ async fn download_with_ytdlp_mp3(cfg: &EffectiveConfig, input: &str) -> Result<S
     }
 
     let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded mp3")?;
-    if meta.len() == 0 { anyhow::bail!("yt-dlp created empty mp3 file"); }
+    if meta.len() == 0 {
+        anyhow::bail!("yt-dlp created empty mp3 file");
+    }
     Ok(out_path)
+}
+
+fn cfg_spotify_creds(cfg: &EffectiveConfig) -> Option<(String, String)> {
+    match (&cfg.spotify_client_id, &cfg.spotify_client_secret) {
+        (Some(id), Some(sec)) if !id.is_empty() && !sec.is_empty() => Some((id.clone(), sec.clone())),
+        _ => None,
+    }
+}
+
+fn parse_spotify_track_id(input: &str) -> Option<String> {
+    if let Some(u) = Url::parse(input).ok() {
+        if let Some(h) = u.host_str() {
+            if !h.contains("spotify.com") {
+                return None;
+            }
+        }
+        let mut prev: Option<String> = None;
+        for seg in u.path_segments()? {
+            if let Some(p) = &prev {
+                if p == "track" && !seg.is_empty() {
+                    let id = seg.split('?').next().unwrap_or(seg);
+                    return Some(id.to_string());
+                }
+            }
+            prev = Some(seg.to_string());
+        }
+        return None;
+    }
+    if let Some(rest) = input.strip_prefix("spotify:track:") {
+        return Some(rest.to_string());
+    }
+    None
+}
+
+#[derive(Deserialize)]
+struct SpotifyOEmbed {
+    title: String,
+}
+
+async fn fetch_spotify_oembed_title(url: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://open.spotify.com/oembed")
+        .query(&[("url", url)])
+        .send()
+        .await
+        .context("spotify oembed get")?
+        .error_for_status()
+        .context("spotify oembed bad status")?;
+    let bytes = resp.bytes().await.context("spotify oembed read body")?;
+    let v: SpotifyOEmbed = serde_json::from_slice(&bytes).context("spotify oembed parse json")?;
+    Ok(v.title)
+}
+
+async fn fetch_spotify_track_metadata(
+    client_id: &str,
+    client_secret: &str,
+    track_id_b62: &str,
+) -> Result<(String, Vec<String>)> {
+    let creds = Credentials { id: client_id.to_string(), secret: Some(client_secret.to_string()) };
+    let spotify = ClientCredsSpotify::new(creds);
+    spotify.request_token().await.map_err(|e| anyhow!("spotify auth: {e}"))?;
+
+    let tid = TrackId::from_id(track_id_b62).map_err(|e| anyhow!("invalid spotify track id: {e}"))?;
+    let track = spotify.track(tid, None).await.map_err(|e| anyhow!("spotify track fetch: {e}"))?;
+    let title = track.name.clone();
+    let artists = track.artists.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    Ok((title, artists))
 }

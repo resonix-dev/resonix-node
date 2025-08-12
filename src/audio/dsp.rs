@@ -69,7 +69,12 @@ pub struct Filters {
 }
 impl Default for Filters {
     fn default() -> Self {
-        Self { volume: 1.0, eq: [0.0; 5], eq_filters_l: [Biquad::default(); 5], eq_filters_r: [Biquad::default(); 5] }
+        Self {
+            volume: 1.0,
+            eq: [0.0; 5],
+            eq_filters_l: [Biquad::default(); 5],
+            eq_filters_r: [Biquad::default(); 5],
+        }
     }
 }
 
@@ -79,7 +84,13 @@ pub fn update_eq_filters(filters: &mut Filters) {
     for (i, &f0) in freqs.iter().enumerate() {
         let gain = filters.eq[i];
         let q = if i == 0 || i == 4 { 0.707 } else { 1.0 };
-        let b = if i == 0 { Biquad::low_shelf(FS, f0, q, gain) } else if i == 4 { Biquad::high_shelf(FS, f0, q, gain) } else { Biquad::peaking(FS, f0, q, gain) };
+        let b = if i == 0 {
+            Biquad::low_shelf(FS, f0, q, gain)
+        } else if i == 4 {
+            Biquad::high_shelf(FS, f0, q, gain)
+        } else {
+            Biquad::peaking(FS, f0, q, gain)
+        };
         filters.eq_filters_l[i] = b;
         filters.eq_filters_r[i] = b;
     }

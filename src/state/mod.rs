@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use dashmap::DashMap;
+use std::sync::Arc;
 
 use crate::audio::player::Player;
 use crate::config::{load_config, EffectiveConfig};
@@ -17,5 +17,7 @@ impl AppState {
 }
 
 impl Default for AppState {
-    fn default() -> Self { Self::new(load_config()) }
+    fn default() -> Self {
+        Self::new(load_config())
+    }
 }

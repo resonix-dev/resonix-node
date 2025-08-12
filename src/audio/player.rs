@@ -1,17 +1,20 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
-use bytes::Bytes;
 use bytemuck;
+use bytes::Bytes;
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::audio::decoder::SymphoniaDecoder;
-use crate::audio::dsp::{Filters, biquad_eq_in_place, update_eq_filters};
-use crate::audio::source::prepare_local_source;
+use crate::audio::dsp::{biquad_eq_in_place, update_eq_filters, Filters};
+use crate::audio::source::{prepare_local_source, transcode_to_mp3};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
-pub struct EqBandParam { pub band: u8, pub gain_db: f32 }
+pub struct EqBandParam {
+    pub band: u8,
+    pub gain_db: f32,
+}
 
 pub struct Player {
     id: String,
@@ -48,13 +51,31 @@ impl Player {
 
         let mut waited_ms: u64 = 0;
         while self.out_tx.receiver_count() == 0 {
-            if waited_ms % 500 == 0 { info!(id=%self.id, "waiting for WS subscriber..."); }
+            if waited_ms % 500 == 0 {
+                info!(id=%self.id, "waiting for WS subscriber...");
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
             waited_ms += 50;
-            if waited_ms >= 5_000 { info!(id=%self.id, "no subscriber after 5s; starting anyway"); break; }
+            if waited_ms >= 5_000 {
+                info!(id=%self.id, "no subscriber after 5s; starting anyway");
+                break;
+            }
         }
 
-        let mut decoder = SymphoniaDecoder::open(&source_path)?;
+        let mut decoder = match SymphoniaDecoder::open(&source_path) {
+            Ok(d) => d,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("unsupported codec") || msg.contains("unsupported feature") {
+                    warn!(%msg, "decoder init failed; trying ffmpeg transcode to mp3");
+                    let mp3 = transcode_to_mp3(&source_path).await?;
+                    info!("Using transcoded source: {}", mp3.display());
+                    SymphoniaDecoder::open(&mp3)?
+                } else {
+                    return Err(e);
+                }
+            }
+        };
 
         const FRAME_SAMPLES: usize = 960;
         const CHANNELS: usize = 2;
@@ -74,18 +95,31 @@ impl Player {
             tick.tick().await;
 
             match stop_rx.try_recv() {
-                Ok(_) => { info!("Stop received for {}", self.id); break; }
-                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => { info!("Stop channel closed for {}", self.id); break; }
+                Ok(_) => {
+                    info!("Stop received for {}", self.id);
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    info!("Stop channel closed for {}", self.id);
+                    break;
+                }
                 Err(_) => {}
             }
-            if let Ok(p) = pause_rx.try_recv() { paused = p; info!("{} paused={}", self.id, paused); }
-            if paused { continue; }
+            if let Ok(p) = pause_rx.try_recv() {
+                paused = p;
+                info!("{} paused={}", self.id, paused);
+            }
+            if paused {
+                continue;
+            }
 
             while !eos && interleaved_i16.len().saturating_sub(head) < SAMPLES_PER_FRAME * 4 {
                 debug!(id=%self.id, "decoding next block");
                 match decoder.next_pcm_block()? {
                     Some(mut block) => {
-                        if block.l.is_empty() { break; }
+                        if block.l.is_empty() {
+                            break;
+                        }
                         let vol = {
                             let mut f = self.ctrl.filters.lock().await;
                             biquad_eq_in_place(&mut block.l, &mut block.r, &mut *f);
@@ -101,9 +135,14 @@ impl Player {
                             interleaved_i16.push((block.r[i] * 32767.0).clamp(-32768.0, 32767.0) as i16);
                         }
                     }
-                    None => { eos = true; break; }
+                    None => {
+                        eos = true;
+                        break;
+                    }
                 }
-                if interleaved_i16.len().saturating_sub(head) >= SAMPLES_PER_FRAME * 2 { break; }
+                if interleaved_i16.len().saturating_sub(head) >= SAMPLES_PER_FRAME * 2 {
+                    break;
+                }
             }
 
             if interleaved_i16.len().saturating_sub(head) >= SAMPLES_PER_FRAME {
@@ -111,14 +150,24 @@ impl Player {
                 let bytes = bytemuck::cast_slice(frame_slice);
                 let _ = self.out_tx.send(Bytes::copy_from_slice(bytes));
                 sent_frames += 1;
-                if sent_frames % 2000 == 0 { info!(id=%self.id, sent_frames, "PCM sent (summary)"); }
+                if sent_frames % 2000 == 0 {
+                    info!(id=%self.id, sent_frames, "PCM sent (summary)");
+                }
                 head += SAMPLES_PER_FRAME;
-                if head >= SAMPLES_PER_FRAME * 8 && head > interleaved_i16.len() / 2 { interleaved_i16.drain(0..head); head = 0; }
+                if head >= SAMPLES_PER_FRAME * 8 && head > interleaved_i16.len() / 2 {
+                    interleaved_i16.drain(0..head);
+                    head = 0;
+                }
                 underruns_logged = 0;
             } else {
-                if underruns_logged < 5 { warn!(id=%self.id, "audio underrun (buffer empty)"); }
+                if underruns_logged < 5 {
+                    warn!(id=%self.id, "audio underrun (buffer empty)");
+                }
                 underruns_logged = underruns_logged.saturating_add(1);
-                if eos { info!("End of stream for {}", self.id); break; }
+                if eos {
+                    info!("End of stream for {}", self.id);
+                    break;
+                }
             }
         }
 
@@ -130,22 +179,38 @@ impl Player {
         (self.ctrl.pause_tx.subscribe(), self.ctrl.stop_tx.subscribe())
     }
 
-    pub fn play(&self) -> Result<()> { let _ = self.ctrl.pause_tx.send(false); Ok(()) }
-    pub fn pause(&self) -> Result<()> { let _ = self.ctrl.pause_tx.send(true); Ok(()) }
-    pub fn stop(&self) { let _ = self.ctrl.stop_tx.send(()); }
+    pub fn play(&self) -> Result<()> {
+        let _ = self.ctrl.pause_tx.send(false);
+        Ok(())
+    }
+    pub fn pause(&self) -> Result<()> {
+        let _ = self.ctrl.pause_tx.send(true);
+        Ok(())
+    }
+    pub fn stop(&self) {
+        let _ = self.ctrl.stop_tx.send(());
+    }
 
     pub fn set_volume(&self, v: f32) {
         let filters = self.ctrl.filters.clone();
-        tokio::spawn(async move { filters.lock().await.volume = v.max(0.0); });
+        tokio::spawn(async move {
+            filters.lock().await.volume = v.max(0.0);
+        });
     }
     pub fn set_eq(&self, bands: Vec<EqBandParam>) {
         let filters = self.ctrl.filters.clone();
         tokio::spawn(async move {
             let mut f = filters.lock().await;
-            for b in bands { if let Some(slot) = f.eq.get_mut(b.band as usize) { *slot = b.gain_db; } }
+            for b in bands {
+                if let Some(slot) = f.eq.get_mut(b.band as usize) {
+                    *slot = b.gain_db;
+                }
+            }
             update_eq_filters(&mut f);
         });
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Bytes> { self.out_tx.subscribe() }
+    pub fn subscribe(&self) -> broadcast::Receiver<Bytes> {
+        self.out_tx.subscribe()
+    }
 }

@@ -2,10 +2,20 @@
 name = "resonix-node"
 version = "0.1.0"
 edition = "2021"
+description = "High-performance audio node. HTTP/WebSocket server that resolves and streams audio using Symphonia and yt-dlp."
+license = "BSD-3-Clause"
+repository = "https://github.com/lumixland/Resonix"
+homepage = "https://github.com/lumixland/Resonix"
+documentation = "https://docs.rs/resonix-node"
+readme = "README.md"
+keywords = ["audio", "discord", "streaming", "yt-dlp", "symphonia"]
+categories = ["audio", "multimedia", "network-programming", "web-programming::http-server"]
+rust-version = "1.74"
+build = "build.rs"
 
 [dependencies]
-anyhow = "1"
-thiserror = "2"
+anyhow = "1.0.99"
+thiserror = "2.0.14"
 bytes = "1"
 axum = { version = "0.8", features = ["ws", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
@@ -21,7 +31,7 @@ regex = "1"
 url = "2"
 ctrlc = "3"
 bytemuck = "1.23.2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls", "stream"] }
 tempfile = "3"
 symphonia = { version = "0.5", features = [
   "aac",
@@ -37,3 +47,16 @@ symphonia = { version = "0.5", features = [
 rustube = "0.6"
 toml = "0.9"
 rspotify = "0.15"
+dotenvy = "0.15"
+
+[badges]
+docsrs = {}
+maintenance = { status = "actively-developed" }
+
+[build-dependencies]
+winres = "0.1"
+
+[package.metadata.bundle]
+name = "Resonix"
+identifier = "gg.lumix.resonix"
+icon = ["assets/binary/icon.icns"]
