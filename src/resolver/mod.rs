@@ -43,6 +43,15 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
             }
             anyhow::bail!("Failed to download YouTube audio");
         }
+        if h.contains("soundcloud.com") {
+            if let Ok(path) = download_with_ytdlp_mp3(cfg, input).await {
+                return Ok(path);
+            }
+            if let Ok(url) = run_yt_dlp(cfg, &["--no-playlist", "-g", input]).await {
+                if !url.is_empty() { return Ok(url); }
+            }
+            anyhow::bail!("Failed to resolve SoundCloud URL");
+        }
         if h.contains("spotify.com") {
             if cfg.allow_spotify_title_search {
                 if let Ok(title) = run_yt_dlp(cfg, &["-e", input]).await {
@@ -89,7 +98,7 @@ pub async fn download_with_ytdlp_to_temp(cfg: &EffectiveConfig, input: &str, for
     let out_path = path.to_string_lossy().to_string();
 
     let mut cmd = Command::new(&cfg.ytdlp_path);
-    cmd.arg("-f").arg(format).arg("-o").arg(&out_path).arg(input);
+    cmd.arg("--no-playlist").arg("-f").arg(format).arg("-o").arg(&out_path).arg(input);
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     let status = cmd.status().await.context("run yt-dlp to download")?;
@@ -99,5 +108,28 @@ pub async fn download_with_ytdlp_to_temp(cfg: &EffectiveConfig, input: &str, for
 
     let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded file")?;
     if meta.len() == 0 { anyhow::bail!("yt-dlp created empty file"); }
+    Ok(out_path)
+}
+
+async fn download_with_ytdlp_mp3(cfg: &EffectiveConfig, input: &str) -> Result<String> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("resonix_").suffix(".mp3");
+    let file = builder.tempfile()?;
+    let path = file.path().to_path_buf();
+    drop(file);
+
+    let out_path = path.to_string_lossy().to_string();
+
+    let mut cmd = Command::new(&cfg.ytdlp_path);
+    cmd.args(["--no-playlist", "-x", "--audio-format", "mp3", "-o"]).arg(&out_path).arg(input);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    let status = cmd.status().await.context("run yt-dlp to download/extract mp3")?;
+    if !status.success() {
+        anyhow::bail!("yt-dlp mp3 extraction failed with status {status}");
+    }
+
+    let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded mp3")?;
+    if meta.len() == 0 { anyhow::bail!("yt-dlp created empty mp3 file"); }
     Ok(out_path)
 }

@@ -7,7 +7,7 @@
 Features
 - HTTP API for creating/controlling players
 - WebSocket PCM stream (48 kHz, stereo, 16-bit, 20 ms frames)
-- Optional resolving/downloading for YouTube/Spotify links via yt-dlp
+- Optional resolving/downloading for YouTube/Spotify/SoundCloud links via yt-dlp
 - Allow/block URL patterns via regex
 - Lightweight EQ and volume filters
 - Minimal authentication via static password header
@@ -42,7 +42,7 @@ Base URL: `http://<host>:<port>` (default `http://127.0.0.1:2333`). If a passwor
 Endpoints
 - POST `/players` → Create player
 	- Request JSON: `{ "id": string, "uri": string }`
-	- Behavior: Validates against allow/block patterns. If resolver is enabled, attempts to resolve page URLs (YouTube/Spotify) to a direct audio file before playback.
+	- Behavior: Validates against allow/block patterns. If resolver is enabled, attempts to resolve page URLs (YouTube/Spotify/SoundCloud) to a direct audio file before playback.
 	- Responses: `201 { "id": string }`, `403` (blocked), `409` (exists), `400` (bad input)
 
 - POST `/players/{id}/play` → Resume playback
@@ -102,6 +102,7 @@ Environment overrides
 
 Notes
 - The resolver downloads temporary audio files using `yt-dlp`. Ensure sufficient disk space and legal use in your jurisdiction.
+ - Some sources (e.g., SoundCloud) use yt-dlp's ffmpeg-based audio extraction for consistent playback; install `ffmpeg` and keep it in PATH.
 
 ---
 
@@ -115,7 +116,7 @@ See `examples/discord-js-bot` for a minimal Discord.js bot that connects to the 
 
 Prereqs
 - Rust toolchain, `cargo`
-- Optional: `yt-dlp` in PATH for resolver
+- Optional: `yt-dlp` in PATH for resolver; `ffmpeg` recommended (used by yt-dlp to extract consistent audio formats)
 
 Common tasks
 - Format: `cargo fmt` (configured via `rustfmt.toml`)
