@@ -19,7 +19,9 @@ mod state;
 mod utils;
 
 use crate::api::handlers::{
-    create_player, delete_player, pause, play, resolve_http, update_filters, ws_stream,
+    create_player, decode_track, decode_tracks, delete_player, enqueue, get_queue, info, list_players,
+    load_tracks, pause, play, resolve_http, set_loop_mode, skip, update_filters, update_metadata, ws_events,
+    ws_stream,
 };
 use crate::config::load_config;
 use crate::middleware::auth::auth_middleware;
@@ -90,13 +92,25 @@ async fn main() -> Result<()> {
     .ok();
 
     let app = Router::new()
-        .route("/players", post(create_player))
-        .route("/players/{id}/play", post(play))
-        .route("/players/{id}/pause", post(pause))
-        .route("/players/{id}", delete(delete_player))
-        .route("/players/{id}/filters", patch(update_filters))
-        .route("/players/{id}/ws", get(ws_stream))
-        .route("/resolve", get(resolve_http))
+        .route("/v0/players", post(create_player))
+        .route("/v0/players", get(list_players))
+        .route("/v0/players/{id}/play", post(play))
+        .route("/v0/players/{id}/pause", post(pause))
+        .route("/v0/players/{id}", delete(delete_player))
+        .route("/v0/players/{id}/filters", patch(update_filters))
+        .route("/v0/players/{id}/metadata", patch(update_metadata))
+        .route("/v0/players/{id}/ws", get(ws_stream))
+        .route("/v0/players/{id}/events", get(ws_events))
+        .route("/v0/players/{id}/queue", post(enqueue))
+        .route("/v0/players/{id}/queue", get(get_queue))
+        .route("/v0/players/{id}/loop", patch(set_loop_mode))
+        .route("/v0/players/{id}/skip", post(skip))
+        .route("/v0/resolve", get(resolve_http))
+        .route("/v0/loadtracks", get(load_tracks))
+        .route("/v0/decodetrack", get(decode_track))
+        .route("/v0/decodetracks", post(decode_tracks))
+        .route("/info", get(info))
+        .route("/version", get(version))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware));
 
