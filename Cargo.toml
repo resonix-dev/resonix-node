@@ -55,6 +55,8 @@ rspotify = { version = "0.15", default-features = false, features = [
   "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
 
 [badges]
 docsrs = {}
