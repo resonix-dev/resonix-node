@@ -133,9 +133,67 @@ pub fn load_config() -> EffectiveConfig {
         spotify: Default::default(),
         sources: Default::default(),
     };
-    if let Ok(contents) =
-        std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml"))
-    {
+
+    let config_paths = ["resonix.toml", "Resonix.toml"];
+    let config_exists = config_paths.iter().any(|path| std::path::Path::new(path).exists());
+
+    if !config_exists {
+        // Create default config file
+        let default_config = r#"# Resonix Node Configuration
+
+[server]
+# Host/IP to bind. Default: 0.0.0.0
+host = "0.0.0.0"
+# Port to bind. Default: 2333
+port = 2333
+# Optional password required in the Authorization header for all requests. Default: unset (no auth)
+# password = "supersecret"
+
+[logging]
+# Truncate .logs/latest.log on startup. Default: true
+clean_log_on_start = true
+
+[resolver]
+# Enable resolver/downloader for non-direct sources (YouTube/Spotify). Default: false
+enabled = true
+# Optional custom path to yt-dlp executable. Default: "yt-dlp"
+ytdlp_path = "yt-dlp"
+# Timeout for resolve/download operations in milliseconds. Default: 20000
+timeout_ms = 20000
+# Preferred format code for yt-dlp (e.g. 140 = m4a). Default: "140"
+preferred_format = "140"
+# If true, Spotify URLs are resolved by title via yt-dlp's YouTube search. Default: true
+allow_spotify_title_search = true
+
+[spotify]
+# --- Spotify Credentials ---
+# To enable Spotify source support, you must set these to valid values from your Spotify Developer Portal.
+# - You can set environment variables and reference them here or set the values directly.
+# See: https://developer.spotify.com/dashboard
+client_id = "SPOTIFY_CLIENT_ID"
+client_secret = "SPOTIFY_CLIENT_SECRET"
+
+[sources]
+# Regex patterns that are allowed. If empty, all are allowed unless blocked.
+# Match is tested against both the full URI and the hostname.
+# Example: only allow YouTube and local files
+# allowed = ["(^|.*)(youtube\\.com|youtu\\.be)(/|$)"]
+allowed = []
+
+# Regex patterns that are blocked. These take priority over allowed.
+# Example: block SoundCloud completely
+# blocked = ["(^|.*)soundcloud\\.com(/|$)"]
+blocked = []"#.to_string();
+
+        if let Err(e) = std::fs::write("resonix.toml", default_config) {
+            tracing::warn!(?e, "Failed to create default config file");
+        } else {
+            tracing::info!("Created default config file at resonix.toml");
+        }
+    }
+
+    // Try to load existing or newly created config
+    if let Ok(contents) = std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml")) {
         match toml::from_str::<RawConfig>(&contents) {
             Ok(parsed) => raw = parsed,
             Err(e) => tracing::warn!(?e, "Failed to parse resonix config; using defaults"),
