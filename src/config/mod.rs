@@ -125,23 +125,7 @@ pub struct EffectiveConfig {
     pub spotify_client_secret: Option<String>,
 }
 
-pub fn load_config() -> EffectiveConfig {
-    let _ = dotenvy::dotenv();
-
-    let mut raw: RawConfig = RawConfig {
-        server: Default::default(),
-        logging: Default::default(),
-        resolver: Default::default(),
-        spotify: Default::default(),
-        sources: Default::default(),
-    };
-
-    let config_paths = ["resonix.toml", "Resonix.toml"];
-    let config_exists = config_paths.iter().any(|path| std::path::Path::new(path).exists());
-
-    if !config_exists {
-        // Create default config file
-        let default_config = r#"# Resonix Node Configuration
+pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Resonix Node Configuration
 
 [server]
 # Host/IP to bind. Default: 0.0.0.0
@@ -185,9 +169,24 @@ allowed = []
 # Regex patterns that are blocked. These take priority over allowed.
 # Example: block SoundCloud completely
 # blocked = ["(^|.*)soundcloud\\.com(/|$)"]
-blocked = []"#.to_string();
+blocked = []"#;
 
-        if let Err(e) = std::fs::write("resonix.toml", default_config) {
+pub fn load_config() -> EffectiveConfig {
+    let _ = dotenvy::dotenv();
+
+    let mut raw: RawConfig = RawConfig {
+        server: Default::default(),
+        logging: Default::default(),
+        resolver: Default::default(),
+        spotify: Default::default(),
+        sources: Default::default(),
+    };
+
+    let config_paths = ["resonix.toml", "Resonix.toml"];
+    let config_exists = config_paths.iter().any(|path| std::path::Path::new(path).exists());
+
+    if !config_exists {
+        if let Err(e) = std::fs::write("resonix.toml", DEFAULT_CONFIG_TEMPLATE) {
             tracing::warn!(?e, "Failed to create default config file");
         } else {
             tracing::info!("Created default config file at resonix.toml");
@@ -195,7 +194,9 @@ blocked = []"#.to_string();
     }
 
     // Try to load existing or newly created config
-    if let Ok(contents) = std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml")) {
+    if let Ok(contents) =
+        std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml"))
+    {
         match toml::from_str::<RawConfig>(&contents) {
             Ok(parsed) => raw = parsed,
             Err(e) => tracing::warn!(?e, "Failed to parse resonix config; using defaults"),

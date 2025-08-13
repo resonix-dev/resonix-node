@@ -11,6 +11,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod api;
 mod audio;
+mod cli;
 mod config;
 mod middleware;
 mod resolver;
@@ -27,6 +28,17 @@ use crate::utils::format_ram_mb;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    match crate::cli::parse_args() {
+        crate::cli::CliAction::PrintVersion => {
+            crate::cli::print_version();
+            return Ok(());
+        }
+        crate::cli::CliAction::InitConfig => {
+            crate::cli::init_config_file();
+            return Ok(());
+        }
+        crate::cli::CliAction::RunServer => { /* continue */ }
+    }
     let cfg = load_config();
     let logs_dir = std::path::Path::new(".logs");
     if !logs_dir.exists() {
