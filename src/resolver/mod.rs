@@ -60,7 +60,6 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
             anyhow::bail!("Failed to resolve SoundCloud URL");
         }
         if h.contains("spotify.com") {
-            // Enforce presence of Spotify credentials when handling Spotify URLs
             if cfg_spotify_creds(cfg).is_none() {
                 anyhow::bail!(
                     "Spotify URL provided but credentials are missing. Provide SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET or configure them in Resonix.toml."
@@ -93,7 +92,7 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
                     }
                 }
             }
-            // Fallback: Spotify oEmbed title
+
             if let Ok(title) = fetch_spotify_oembed_title(input).await {
                 let query = format!("ytsearch1:{}", title);
                 if let Ok(path) =
@@ -113,7 +112,6 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
                 }
             }
 
-            // Last resort fallback: yt-dlp -e
             if cfg.allow_spotify_title_search {
                 if let Ok(title) = run_yt_dlp(cfg, &["-e", input]).await {
                     let query = format!("ytsearch1:{}", title);
@@ -142,7 +140,7 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
 }
 
 async fn run_yt_dlp(cfg: &EffectiveConfig, args: &[&str]) -> Result<String> {
-    let bin = cfg.ytdlp_path.clone();
+    let bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
     let mut cmd = Command::new(bin);
     cmd.args(args);
     cmd.stderr(std::process::Stdio::null());
@@ -178,7 +176,8 @@ pub async fn download_with_ytdlp_to_temp(
 
     let out_path = path.to_string_lossy().to_string();
 
-    let mut cmd = Command::new(&cfg.ytdlp_path);
+    let ytdlp_bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
+    let mut cmd = Command::new(&ytdlp_bin);
     cmd.arg("--no-playlist").arg("-f").arg(format).arg("-o").arg(&out_path).arg(input);
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
@@ -203,7 +202,8 @@ async fn download_with_ytdlp_mp3(cfg: &EffectiveConfig, input: &str) -> Result<S
 
     let out_path = path.to_string_lossy().to_string();
 
-    let mut cmd = Command::new(&cfg.ytdlp_path);
+    let ytdlp_bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
+    let mut cmd = Command::new(&ytdlp_bin);
     cmd.args(["--no-playlist", "-x", "--audio-format", "mp3", "-o"]).arg(&out_path).arg(input);
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());

@@ -57,6 +57,8 @@ pub struct ResolverConfig {
     pub enabled: bool,
     #[serde(default)]
     pub ytdlp_path: Option<String>,
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
     #[serde(default = "default_resolve_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_preferred_format")]
@@ -81,6 +83,7 @@ impl Default for ResolverConfig {
         Self {
             enabled: default_resolver_enabled(),
             ytdlp_path: None,
+            ffmpeg_path: None,
             timeout_ms: default_resolve_timeout(),
             preferred_format: default_preferred_format(),
             allow_spotify_title_search: default_allow_spotify_title_search(),
@@ -90,7 +93,6 @@ impl Default for ResolverConfig {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SpotifyConfig {
-    // Values can be either direct secrets or names of environment variables to resolve from .env/ENV
     #[serde(default)]
     pub client_id: Option<String>,
     #[serde(default)]
@@ -112,6 +114,7 @@ pub struct EffectiveConfig {
     pub clean_log_on_start: bool,
     pub resolver_enabled: bool,
     pub ytdlp_path: String,
+    pub ffmpeg_path: String,
     pub resolve_timeout_ms: u64,
     pub preferred_format: String,
     pub allow_spotify_title_search: bool,
@@ -123,7 +126,6 @@ pub struct EffectiveConfig {
 }
 
 pub fn load_config() -> EffectiveConfig {
-    // Load .env first so env lookups can find user-provided values
     let _ = dotenvy::dotenv();
 
     let mut raw: RawConfig = RawConfig {
@@ -203,12 +205,12 @@ blocked = []"#.to_string();
     let resolver_env =
         std::env::var("RESONIX_RESOLVE").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let ytdlp_env = std::env::var("YTDLP_PATH").ok();
+    let ffmpeg_env = std::env::var("FFMPEG_PATH").ok();
     let timeout_env = std::env::var("RESOLVE_TIMEOUT_MS").ok().and_then(|s| s.parse().ok());
 
     let allow_patterns = raw.sources.allowed.iter().filter_map(|p| Regex::new(p).ok()).collect::<Vec<_>>();
     let block_patterns = raw.sources.blocked.iter().filter_map(|p| Regex::new(p).ok()).collect::<Vec<_>>();
 
-    // Helper: if the provided string matches an existing env var name, use its value; otherwise treat it as a literal secret.
     fn env_or_literal(val: &Option<String>, fallback_env: &str) -> Option<String> {
         if let Some(s) = val {
             if let Ok(v) = std::env::var(s) {
@@ -228,6 +230,8 @@ blocked = []"#.to_string();
         clean_log_on_start: raw.logging.clean_log_on_start,
         resolver_enabled: resolver_env.unwrap_or(raw.resolver.enabled),
         ytdlp_path: ytdlp_env.unwrap_or_else(|| raw.resolver.ytdlp_path.unwrap_or_else(|| "yt-dlp".into())),
+        ffmpeg_path: ffmpeg_env
+            .unwrap_or_else(|| raw.resolver.ffmpeg_path.clone().unwrap_or_else(|| "ffmpeg".into())),
         resolve_timeout_ms: timeout_env.unwrap_or(raw.resolver.timeout_ms),
         preferred_format: raw.resolver.preferred_format,
         allow_spotify_title_search: raw.resolver.allow_spotify_title_search,
