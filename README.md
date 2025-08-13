@@ -166,6 +166,14 @@ Project layout
 - `src/audio/` → decoding, DSP, player
 - `Resonix.toml` → example configuration
 
+### CLI
+
+Basic flags:
+- `--version`, `-V`, `-version` → print version and exit
+- `--init-config` → create `Resonix.toml` in the current directory (fails if it already exists) and exit
+
+If no flag is passed, the server starts normally.
+
 ---
 
 ## Security
