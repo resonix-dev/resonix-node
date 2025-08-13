@@ -57,6 +57,8 @@ pub struct ResolverConfig {
     pub enabled: bool,
     #[serde(default)]
     pub ytdlp_path: Option<String>,
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
     #[serde(default = "default_resolve_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_preferred_format")]
@@ -81,6 +83,7 @@ impl Default for ResolverConfig {
         Self {
             enabled: default_resolver_enabled(),
             ytdlp_path: None,
+            ffmpeg_path: None,
             timeout_ms: default_resolve_timeout(),
             preferred_format: default_preferred_format(),
             allow_spotify_title_search: default_allow_spotify_title_search(),
@@ -90,7 +93,6 @@ impl Default for ResolverConfig {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SpotifyConfig {
-    // Values can be either direct secrets or names of environment variables to resolve from .env/ENV
     #[serde(default)]
     pub client_id: Option<String>,
     #[serde(default)]
@@ -112,6 +114,7 @@ pub struct EffectiveConfig {
     pub clean_log_on_start: bool,
     pub resolver_enabled: bool,
     pub ytdlp_path: String,
+    pub ffmpeg_path: String,
     pub resolve_timeout_ms: u64,
     pub preferred_format: String,
     pub allow_spotify_title_search: bool,
@@ -122,8 +125,53 @@ pub struct EffectiveConfig {
     pub spotify_client_secret: Option<String>,
 }
 
+pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Resonix Node Configuration
+
+[server]
+# Host/IP to bind. Default: 0.0.0.0
+host = "0.0.0.0"
+# Port to bind. Default: 2333
+port = 2333
+# Optional password required in the Authorization header for all requests. Default: unset (no auth)
+# password = "supersecret"
+
+[logging]
+# Truncate .logs/latest.log on startup. Default: true
+clean_log_on_start = true
+
+[resolver]
+# Enable resolver/downloader for non-direct sources (YouTube/Spotify). Default: false
+enabled = true
+# Optional custom path to yt-dlp executable. Default: "yt-dlp"
+ytdlp_path = "yt-dlp"
+# Timeout for resolve/download operations in milliseconds. Default: 20000
+timeout_ms = 20000
+# Preferred format code for yt-dlp (e.g. 140 = m4a). Default: "140"
+preferred_format = "140"
+# If true, Spotify URLs are resolved by title via yt-dlp's YouTube search. Default: true
+allow_spotify_title_search = true
+
+[spotify]
+# --- Spotify Credentials ---
+# To enable Spotify source support, you must set these to valid values from your Spotify Developer Portal.
+# - You can set environment variables and reference them here or set the values directly.
+# See: https://developer.spotify.com/dashboard
+client_id = "SPOTIFY_CLIENT_ID"
+client_secret = "SPOTIFY_CLIENT_SECRET"
+
+[sources]
+# Regex patterns that are allowed. If empty, all are allowed unless blocked.
+# Match is tested against both the full URI and the hostname.
+# Example: only allow YouTube and local files
+# allowed = ["(^|.*)(youtube\\.com|youtu\\.be)(/|$)"]
+allowed = []
+
+# Regex patterns that are blocked. These take priority over allowed.
+# Example: block SoundCloud completely
+# blocked = ["(^|.*)soundcloud\\.com(/|$)"]
+blocked = []"#;
+
 pub fn load_config() -> EffectiveConfig {
-    // Load .env first so env lookups can find user-provided values
     let _ = dotenvy::dotenv();
 
     let mut raw: RawConfig = RawConfig {
@@ -133,6 +181,19 @@ pub fn load_config() -> EffectiveConfig {
         spotify: Default::default(),
         sources: Default::default(),
     };
+
+    let config_paths = ["resonix.toml", "Resonix.toml"];
+    let config_exists = config_paths.iter().any(|path| std::path::Path::new(path).exists());
+
+    if !config_exists {
+        if let Err(e) = std::fs::write("resonix.toml", DEFAULT_CONFIG_TEMPLATE) {
+            tracing::warn!(?e, "Failed to create default config file");
+        } else {
+            tracing::info!("Created default config file at resonix.toml");
+        }
+    }
+
+    // Try to load existing or newly created config
     if let Ok(contents) =
         std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml"))
     {
@@ -145,12 +206,12 @@ pub fn load_config() -> EffectiveConfig {
     let resolver_env =
         std::env::var("RESONIX_RESOLVE").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let ytdlp_env = std::env::var("YTDLP_PATH").ok();
+    let ffmpeg_env = std::env::var("FFMPEG_PATH").ok();
     let timeout_env = std::env::var("RESOLVE_TIMEOUT_MS").ok().and_then(|s| s.parse().ok());
 
     let allow_patterns = raw.sources.allowed.iter().filter_map(|p| Regex::new(p).ok()).collect::<Vec<_>>();
     let block_patterns = raw.sources.blocked.iter().filter_map(|p| Regex::new(p).ok()).collect::<Vec<_>>();
 
-    // Helper: if the provided string matches an existing env var name, use its value; otherwise treat it as a literal secret.
     fn env_or_literal(val: &Option<String>, fallback_env: &str) -> Option<String> {
         if let Some(s) = val {
             if let Ok(v) = std::env::var(s) {
@@ -170,6 +231,8 @@ pub fn load_config() -> EffectiveConfig {
         clean_log_on_start: raw.logging.clean_log_on_start,
         resolver_enabled: resolver_env.unwrap_or(raw.resolver.enabled),
         ytdlp_path: ytdlp_env.unwrap_or_else(|| raw.resolver.ytdlp_path.unwrap_or_else(|| "yt-dlp".into())),
+        ffmpeg_path: ffmpeg_env
+            .unwrap_or_else(|| raw.resolver.ffmpeg_path.clone().unwrap_or_else(|| "ffmpeg".into())),
         resolve_timeout_ms: timeout_env.unwrap_or(raw.resolver.timeout_ms),
         preferred_format: raw.resolver.preferred_format,
         allow_spotify_title_search: raw.resolver.allow_spotify_title_search,

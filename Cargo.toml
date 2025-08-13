@@ -1,6 +1,6 @@
 [package]
 name = "resonix-node"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "High-performance audio node. HTTP/WebSocket server that resolves and streams audio using Symphonia and yt-dlp."
 license = "BSD-3-Clause"
@@ -55,6 +55,8 @@ rspotify = { version = "0.15", default-features = false, features = [
   "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
 
 [badges]
 docsrs = {}
@@ -62,8 +64,12 @@ maintenance = { status = "actively-developed" }
 
 [build-dependencies]
 winres = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+zip = "0.4"
+tar = "0.4"
+xz2 = "0.1"
 
 [package.metadata.bundle]
 name = "Resonix"
-identifier = "gg.lumix.resonix"
-icon = ["assets/binary/icon.icns"]
+identifier = "dev.resonix.node"
+icon = ["assets/app/icon.icns"]

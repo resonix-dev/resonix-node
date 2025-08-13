@@ -11,14 +11,20 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::audio::player::{EqBandParam, Player};
+use crate::audio::track::LoopMode;
 use crate::config::{resolver_enabled, EffectiveConfig};
 use crate::resolver::{is_uri_allowed, needs_resolve, resolve_to_direct};
 use crate::state::AppState;
+use axum::extract::Query;
+use base64::Engine;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
 pub struct CreatePlayerReq {
     pub id: String,
     pub uri: String,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +84,9 @@ pub async fn create_player(
 
     let player = Player::new(&req.id, &uri).map_err(|_| StatusCode::BAD_REQUEST)?;
     let player = std::sync::Arc::new(player);
+    if let Some(md) = req.metadata {
+        player.set_metadata(md).await;
+    }
     state.players.insert(req.id.clone(), player.clone());
 
     tokio::spawn(async move {
@@ -133,6 +142,291 @@ pub async fn update_filters(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Serialize)]
+pub struct TrackInfoOut {
+    pub identifier: String,
+    #[serde(rename = "isSeekable")]
+    pub is_seekable: bool,
+    pub author: String,
+    pub length: i64,
+    #[serde(rename = "isStream")]
+    pub is_stream: bool,
+    pub position: i64,
+    pub title: String,
+    pub uri: String,
+    #[serde(rename = "artworkUrl")]
+    pub artwork_url: Option<String>,
+    pub isrc: Option<String>,
+    #[serde(rename = "sourceName")]
+    pub source_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrackOut {
+    pub encoded: String,
+    pub info: TrackInfoOut,
+    #[serde(rename = "pluginInfo")]
+    pub plugin_info: serde_json::Value,
+    #[serde(rename = "userData")]
+    pub user_data: serde_json::Value,
+}
+
+pub async fn list_players(State(state): State<AppState>) -> impl IntoResponse {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let engine = base64::engine::general_purpose::STANDARD;
+    for p in state.players.iter() {
+        let md = p.metadata().await;
+        let ti = p.track_info_snapshot().await;
+        out.push(serde_json::json!({
+            "id": p.id().to_string(),
+            "track": TrackOut {
+                encoded: engine.encode(p.track_identifier()),
+                info: TrackInfoOut {
+                    identifier: ti.identifier,
+                    is_seekable: ti.is_seekable,
+                    author: ti.author,
+                    length: ti.length_ms as i64,
+                    is_stream: ti.is_stream,
+                    position: ti.position_ms as i64,
+                    title: ti.title,
+                    uri: ti.uri,
+                    artwork_url: ti.artwork_url,
+                    isrc: ti.isrc,
+                    source_name: ti.source_name,
+                },
+                plugin_info: serde_json::json!({}),
+                user_data: md,
+            }
+        }));
+    }
+    Json(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MetadataUpdateReq {
+    pub merge: bool,
+    pub value: serde_json::Value,
+}
+
+pub async fn update_metadata(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<MetadataUpdateReq>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    if req.merge {
+        p.merge_metadata(req.value).await;
+    } else {
+        p.set_metadata(req.value).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnqueueReq {
+    pub uri: String,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub async fn enqueue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<EnqueueReq>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    if !is_uri_allowed(&state.cfg, &req.uri) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let md = req.metadata.unwrap_or_else(|| serde_json::json!({}));
+    let track_id = p.enqueue(req.uri.clone(), md).await;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"trackId": track_id}))))
+}
+
+pub async fn get_queue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let q = p.queue_snapshot().await;
+    Ok(Json(q))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoopModeReq {
+    pub mode: LoopMode,
+}
+
+pub async fn set_loop_mode(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<LoopModeReq>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    p.set_loop_mode(req.mode).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn skip(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    p.skip();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn ws_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, StatusCode> {
+    let p = state.players.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let rx = p.subscribe_events();
+    Ok(ws.on_upgrade(move |socket| async move { ws_events_task(socket, rx).await }))
+}
+
+async fn ws_events_task(
+    mut socket: axum::extract::ws::WebSocket,
+    mut rx: tokio::sync::broadcast::Receiver<crate::audio::player::PlayerEvent>,
+) {
+    use axum::extract::ws::Message;
+    use serde_json::json;
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(ev) => {
+                        if socket.send(Message::Text(json!(ev).to_string().into())).await.is_err() { break; }
+                    }
+                    Err(_) => break,
+                }
+            }
+            else => break,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoadTracksQuery {
+    pub identifier: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "loadType", content = "data")]
+pub enum LoadResult {
+    #[serde(rename = "track")]
+    Track(Box<TrackOut>),
+    #[serde(rename = "empty")]
+    Empty(serde_json::Value),
+}
+
+pub async fn load_tracks(Query(q): Query<LoadTracksQuery>) -> impl IntoResponse {
+    let engine = base64::engine::general_purpose::STANDARD;
+    if q.identifier.trim().is_empty() {
+        return Json(LoadResult::Empty(serde_json::json!({})));
+    }
+    let info = TrackInfoOut {
+        identifier: q.identifier.clone(),
+        is_seekable: false,
+        author: String::new(),
+        length: 0,
+        is_stream: true,
+        position: 0,
+        title: q.identifier.clone(),
+        uri: q.identifier.clone(),
+        artwork_url: None,
+        isrc: None,
+        source_name: "direct".into(),
+    };
+    let encoded = engine.encode(q.identifier.clone());
+    Json(LoadResult::Track(Box::new(TrackOut {
+        encoded,
+        info,
+        plugin_info: serde_json::json!({}),
+        user_data: serde_json::json!({}),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DecodeTrackQuery {
+    #[serde(rename = "encodedTrack")]
+    pub encoded_track: String,
+}
+
+pub async fn decode_track(Query(q): Query<DecodeTrackQuery>) -> impl IntoResponse {
+    let engine = base64::engine::general_purpose::STANDARD;
+    match engine.decode(q.encoded_track) {
+        Ok(bytes) => {
+            let s = String::from_utf8_lossy(&bytes).to_string();
+            let info = TrackInfoOut {
+                identifier: s.clone(),
+                is_seekable: false,
+                author: String::new(),
+                length: 0,
+                is_stream: true,
+                position: 0,
+                title: s.clone(),
+                uri: s.clone(),
+                artwork_url: None,
+                isrc: None,
+                source_name: "direct".into(),
+            };
+            Json(TrackOut {
+                encoded: engine.encode(s.clone()),
+                info,
+                plugin_info: serde_json::json!({}),
+                user_data: serde_json::json!({}),
+            })
+            .into_response()
+        }
+        Err(_) => (StatusCode::BAD_REQUEST, "invalid base64").into_response(),
+    }
+}
+
+pub async fn decode_tracks(Json(arr): Json<Vec<String>>) -> impl IntoResponse {
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut out = Vec::new();
+    for enc in arr {
+        if let Ok(bytes) = engine.decode(&enc) {
+            if let Ok(s) = String::from_utf8(bytes.clone()) {
+                out.push(TrackOut {
+                    encoded: engine.encode(s.clone()),
+                    info: TrackInfoOut {
+                        identifier: s.clone(),
+                        is_seekable: false,
+                        author: String::new(),
+                        length: 0,
+                        is_stream: true,
+                        position: 0,
+                        title: s.clone(),
+                        uri: s.clone(),
+                        artwork_url: None,
+                        isrc: None,
+                        source_name: "direct".into(),
+                    },
+                    plugin_info: serde_json::json!({}),
+                    user_data: serde_json::json!({}),
+                });
+            }
+        }
+    }
+    Json(out)
+}
+
+#[derive(Debug, Serialize)]
+pub struct InfoResponse {
+    version: String,
+    #[serde(rename = "buildTime")]
+    build_time: u64,
+}
+
+pub async fn info() -> impl IntoResponse {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let build_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    Json(InfoResponse { version, build_time: build_time })
+}
+
 pub async fn resolve_http(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -142,7 +436,6 @@ pub async fn resolve_http(
         return (StatusCode::BAD_REQUEST, "resolver disabled".to_string());
     }
     if let Some(u) = q.get("url") {
-        // Block Spotify URLs when no Spotify credentials are configured
         if let Ok(parsed) = url::Url::parse(u) {
             if let Some(h) = parsed.host_str() {
                 if h.to_lowercase().contains("spotify.com") {
