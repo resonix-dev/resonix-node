@@ -47,7 +47,8 @@ pub async fn transcode_to_mp3(input: &Path) -> Result<PathBuf> {
     let out_path = tmp.path().to_path_buf();
     drop(tmp);
 
-    let status = tokio::process::Command::new("ffmpeg")
+    let ffmpeg_bin = std::env::var("RESONIX_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
+    let status = tokio::process::Command::new(ffmpeg_bin)
         .arg("-y")
         .arg("-i")
         .arg(input)
