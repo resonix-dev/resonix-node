@@ -8,7 +8,7 @@ Thanks for your interest in contributing!
 
 ## Development setup
 - Install Rust (stable) and `cargo`.
-- Optional: `yt-dlp` in PATH if you want to test resolver behavior locally.
+- Optional: `yt-dlp` in PATH if you want; otherwise the node will auto-download tools to `~/.resonix/bin` on first run.
 - Build: `cargo build` | Format: `cargo fmt`
 
 ## Coding guidelines

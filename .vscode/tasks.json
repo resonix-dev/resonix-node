@@ -13,7 +13,7 @@
 		{
 			"label": "debug: cargo build",
 			"type": "shell",
-			"command": "cargo build --debug",
+			"command": "cargo build",
 			"problemMatcher": [
 				"$rustc"
 			],
