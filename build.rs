@@ -16,10 +16,9 @@ fn main() {
             }
         }
 
-    let company = env::var("RESONIX_COMPANY").unwrap_or_else(|_| "Resonix OSS Team".into());
+        let company = env::var("RESONIX_COMPANY").unwrap_or_else(|_| "Resonix OSS Team".into());
         let product = env::var("RESONIX_PRODUCT").unwrap_or_else(|_| "Resonix".into());
-        let copyright = env::var("RESONIX_COPYRIGHT")
-            .unwrap_or_else(|_| "© 2025 Resonix OSS".into());
+        let copyright = env::var("RESONIX_COPYRIGHT").unwrap_or_else(|_| "© 2025 Resonix OSS".into());
 
         let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
         res.set("CompanyName", &company);
