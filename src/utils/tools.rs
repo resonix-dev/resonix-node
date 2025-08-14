@@ -67,12 +67,12 @@ pub async fn ensure_tool(kind: ToolKind) -> Result<Option<PathBuf>> {
     tokio::fs::create_dir_all(&dir).await.ok();
     let path = dir.join(kind.filename());
     if path.exists() {
-    debug!(tool=?kind, installed_path=%path.display(), "Tool already present; skipping download");
+        debug!(tool=?kind, installed_path=%path.display(), "Tool already present; skipping download");
         return Ok(Some(path));
     }
     let url = kind.url();
     if url.is_empty() {
-    debug!(tool=?kind, "No download URL defined for platform; skipping");
+        debug!(tool=?kind, "No download URL defined for platform; skipping");
         return Ok(None);
     }
     info!(tool=?kind, %url, dest=%path.display(), "Downloading tool (first run)");
@@ -86,23 +86,28 @@ pub async fn ensure_tool(kind: ToolKind) -> Result<Option<PathBuf>> {
         };
         let mut extracted: Vec<String> = Vec::new();
         if url.ends_with(".zip") {
-        let resp = reqwest::get(url).await.context("download ffmpeg zip")?;
-        let status = resp.status();
-        if !status.is_success() { anyhow::bail!("ffmpeg zip request failed {status}"); }
-        let bytes = resp.bytes().await?;
-        info!(tool=?kind, size_bytes=bytes.len(), "Archive downloaded; extracting (zip)");
+            let resp = reqwest::get(url).await.context("download ffmpeg zip")?;
+            let status = resp.status();
+            if !status.is_success() {
+                anyhow::bail!("ffmpeg zip request failed {status}");
+            }
+            let bytes = resp.bytes().await?;
+            info!(tool=?kind, size_bytes=bytes.len(), "Archive downloaded; extracting (zip)");
             let reader = std::io::Cursor::new(bytes);
             let mut zip = zip::ZipArchive::new(reader).context("open ffmpeg zip")?;
-        let total = zip.len();
-        debug!(entries=total, tool=?kind, "Scanning zip entries for binary");
+            let total = zip.len();
+            debug!(entries=total, tool=?kind, "Scanning zip entries for binary");
             for i in 0..zip.len() {
                 let mut file = zip.by_index(i).context("zip entry")?;
                 let entry_name = file.name().to_string();
-                if entry_name.ends_with('/') { continue; }
+                if entry_name.ends_with('/') {
+                    continue;
+                }
                 if let Some(fname) = entry_name.rsplit('/').next() {
                     if required_bins.contains(&fname) {
                         let out_path = dir.join(fname);
-                        let mut out = std::fs::File::create(&out_path).context("create ffmpeg related bin")?;
+                        let mut out =
+                            std::fs::File::create(&out_path).context("create ffmpeg related bin")?;
                         std::io::copy(&mut file, &mut out).context("write ffmpeg related bin")?;
                         extracted.push(fname.to_string());
                         debug!(tool=?kind, matched_entry=%entry_name, dest=%out_path.display(), "Extracted binary from zip");
@@ -110,11 +115,13 @@ pub async fn ensure_tool(kind: ToolKind) -> Result<Option<PathBuf>> {
                 }
             }
         } else if url.ends_with(".tar.xz") {
-        let resp = reqwest::get(url).await.context("download ffmpeg tar.xz")?;
-        let status = resp.status();
-        if !status.is_success() { anyhow::bail!("ffmpeg tar.xz request failed {status}"); }
-        let bytes = resp.bytes().await?;
-        info!(tool=?kind, size_bytes=bytes.len(), "Archive downloaded; extracting (tar.xz)");
+            let resp = reqwest::get(url).await.context("download ffmpeg tar.xz")?;
+            let status = resp.status();
+            if !status.is_success() {
+                anyhow::bail!("ffmpeg tar.xz request failed {status}");
+            }
+            let bytes = resp.bytes().await?;
+            info!(tool=?kind, size_bytes=bytes.len(), "Archive downloaded; extracting (tar.xz)");
             let cursor = std::io::Cursor::new(bytes);
             let xz = xz2::read::XzDecoder::new(cursor);
             let mut archive = tar::Archive::new(xz);
@@ -123,7 +130,9 @@ pub async fn ensure_tool(kind: ToolKind) -> Result<Option<PathBuf>> {
                 let mut target: Option<String> = None;
                 if let Ok(p) = entry.path() {
                     if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                        if required_bins.contains(&fname) { target = Some(fname.to_string()); }
+                        if required_bins.contains(&fname) {
+                            target = Some(fname.to_string());
+                        }
                     }
                 }
                 if let Some(fname) = target {
@@ -141,14 +150,14 @@ pub async fn ensure_tool(kind: ToolKind) -> Result<Option<PathBuf>> {
             warn!(tool=?kind, extracted=?extracted, "Archive processed but 'ffmpeg' binary not found");
         }
     } else {
-    let resp = reqwest::get(url).await.context("download yt-dlp")?;
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("yt-dlp request failed {status}");
-    }
-    let bytes = resp.bytes().await?;
-    info!(tool=?kind, size_bytes=bytes.len(), "Binary downloaded; writing to disk");
-    tokio::fs::write(&path, &bytes).await.context("write yt-dlp")?;
+        let resp = reqwest::get(url).await.context("download yt-dlp")?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("yt-dlp request failed {status}");
+        }
+        let bytes = resp.bytes().await?;
+        info!(tool=?kind, size_bytes=bytes.len(), "Binary downloaded; writing to disk");
+        tokio::fs::write(&path, &bytes).await.context("write yt-dlp")?;
     }
 
     #[cfg(unix)]
