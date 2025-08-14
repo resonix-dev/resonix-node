@@ -24,6 +24,7 @@ body:
     attributes:
       label: Resolver enabled
       options: ["yes", "no", "unknown"]
+      default: "yes"
   - type: textarea
     id: config
     attributes:
@@ -48,3 +49,4 @@ body:
       label: Logs
       description: Relevant server logs around the time of the issue
       render: text
+
