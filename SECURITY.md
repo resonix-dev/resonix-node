@@ -15,4 +15,4 @@ Handling and Disclosure
 Operational Guidance
 - If you enable authentication, keep your `server.password` secret and rotate it if leaked.
 - Avoid exposing the node directly to the public internet; prefer a private network or authentication proxy.
-- Keep dependencies and `yt-dlp` up to date if you use the resolver.
+- Keep dependencies and the auto-downloaded tools (`yt-dlp`, `ffmpeg`) up to date if you use the resolver. Delete them in `~/.resonix/bin` to force fresh download.
