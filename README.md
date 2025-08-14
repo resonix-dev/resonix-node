@@ -11,7 +11,7 @@ Features
 - Allow/block URL patterns via regex
 - Lightweight EQ and volume filters
 - Minimal authentication via static password header
-- Self-contained (optional): embeds `yt-dlp` and `ffmpeg` binaries inside the executable
+- First-run auto-download of `yt-dlp` and `ffmpeg` into a user cache (`~/.resonix/bin`) keeping the executable slim
 
 ### Status
 Early preview. APIs may evolve. See License (BSD-3-Clause).
@@ -109,35 +109,28 @@ Environment overrides
 - `RESOLVE_TIMEOUT_MS=...` → override timeout
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` → fallback env vars if `[spotify]` section is omitted.
 	- You can also set custom env var names and reference them from the config, e.g.: `client_id = "MY_APP_SPOTIFY_ID"` and then set `MY_APP_SPOTIFY_ID` in your `.env` or environment.
-- `RESONIX_EMBED_EXTRACT_DIR=...` → directory to which embedded binaries are written (default: OS temp dir / `resonix-embedded`)
+- (legacy) `RESONIX_EMBED_EXTRACT_DIR` is ignored now; tools are stored in `~/.resonix/bin`
+	(runtime export `RESONIX_TOOLS_DIR` shows the resolved directory)
 
 Runtime export (informational)
 - On startup the resolved paths are placed into `RESONIX_YTDLP_BIN` / `RESONIX_FFMPEG_BIN` env vars for child processes spawned by the node. Normally you do not need to set these manually.
 
-### Embedded binaries (standalone mode)
+### Tool management (yt-dlp / ffmpeg)
 
-Resonix can bundle `yt-dlp` and `ffmpeg` directly into the executable:
+On startup Resonix checks for `yt-dlp` and `ffmpeg`.
 
-1. During build, `build.rs` downloads platform-appropriate binaries into `assets/bin` (if they are missing).
-2. Those files are embedded with `include_bytes!` so the final `resonix-node` can run without the tools installed system-wide.
-3. At runtime, if the configured / external tool paths fail validation, the embedded bytes are extracted to a writable folder (default temporary directory or `RESONIX_EMBED_EXTRACT_DIR`) and invoked from there.
-
-Selection order for each tool:
+Resolution order (per tool):
 1. Explicit env (`YTDLP_PATH` / `FFMPEG_PATH`)
-2. Config value (`resolver.ytdlp_path` / `resolver.ffmpeg_path`)
-3. Embedded binary fallback (if present)
+2. Config (`resolver.ytdlp_path` / `resolver.ffmpeg_path`)
+3. Auto-managed download to `~/.resonix/bin` (created if missing)
 
-To force use of your own system tools, either:
-- Set `YTDLP_PATH` / `FFMPEG_PATH` to the desired executables, or
-- Provide paths in `Resonix.toml` and keep them working; embedded versions are only used if validation (`--version` / `-version`) fails.
+If only one tool is missing, only that one is downloaded. Existing executables are left untouched. Delete a file to force re-download of the latest release.
 
-To update embedded versions, delete the corresponding file(s) in `assets/bin` and rebuild; they will be re-downloaded.
-
-To ship a smaller binary without embedding, remove the files from `assets/bin` before building (they will not be embedded if absent) and rely on external paths/env values.
+macOS: `ffmpeg` is not auto-downloaded (install via Homebrew: `brew install ffmpeg`).
 
 Notes
 - The resolver downloads temporary audio files using `yt-dlp`. Ensure sufficient disk space and legal use in your jurisdiction.
-- For sources needing remux/extraction, `ffmpeg` is required. Embedded or external versions are acceptable.
+- For sources needing remux/extraction, `ffmpeg` is required.
 
 ---
 
