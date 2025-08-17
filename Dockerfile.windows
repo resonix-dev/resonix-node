@@ -7,11 +7,12 @@ ENV RUSTUP_HOME=C:\rust\rustup \
     CARGO_HOME=C:\rust\cargo \
     PATH=C:\rust\cargo\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\
 
-RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 ; \
-    Invoke-WebRequest https://static.rust-lang.org/rustup/init.exe -OutFile rustup-init.exe ; \
-    Start-Process .\rustup-init.exe -ArgumentList @('-y','--profile','minimal','--default-toolchain', $env:RUST_VERSION) -NoNewWindow -Wait ; \
-    Remove-Item rustup-init.exe -Force ; \
-    rustc -V ; cargo -V
+RUN $ProgressPreference = 'SilentlyContinue'; \
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
+    Invoke-WebRequest https://static.rust-lang.org/rustup/init.exe -OutFile rustup-init.exe; \
+    Start-Process -FilePath .\rustup-init.exe -ArgumentList @('-y','--profile','minimal','--default-toolchain', $env:RUST_VERSION) -NoNewWindow -Wait; \
+    Remove-Item rustup-init.exe -Force; \
+    rustc -V; cargo -V
 
 WORKDIR C:\app
 
