@@ -1,5 +1,6 @@
 # Builder stage (Windows)
-FROM rust:1.89-windowsservercore-ltsc2022 AS builder
+ARG RUST_VERSION=1.80
+FROM rust:${RUST_VERSION}-windowsservercore-ltsc2022 AS builder
 SHELL ["cmd", "/S", "/C"]
 WORKDIR C:\app
 COPY . .
