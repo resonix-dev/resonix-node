@@ -1,16 +1,20 @@
 # Builder stage (Windows)
-FROM rust:1.89 AS builder
+FROM rust:1.89-windowsservercore-ltsc2022 AS builder
 SHELL ["cmd", "/S", "/C"]
 WORKDIR C:\app
 COPY . .
 
-RUN cargo build --release
+RUN set RUSTFLAGS= && cargo build --release
 
 # Runtime stage
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
 WORKDIR C:\app
 
 COPY --from=builder C:/app/target/release/resonix-node.exe C:/app/resonix-node.exe
+COPY --from=builder C:/Windows/System32/vcruntime140.dll C:/Windows/System32/vcruntime140.dll
+COPY --from=builder C:/Windows/System32/vcruntime140_1.dll C:/Windows/System32/vcruntime140_1.dll
+COPY --from=builder C:/Windows/System32/msvcp140.dll C:/Windows/System32/msvcp140.dll
+
 COPY assets/ /app/assets/
 EXPOSE 0-65535
 ENV RUST_LOG=info
