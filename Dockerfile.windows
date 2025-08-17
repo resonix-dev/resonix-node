@@ -1,22 +1,38 @@
-# Builder stage (Windows)
-ARG RUST_VERSION=1.80
-FROM rust:${RUST_VERSION}-windowsservercore-ltsc2022 AS builder
-SHELL ["cmd", "/S", "/C"]
+# Builder Stage
+ARG RUST_VERSION=1.80.0
+FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS builder
+SHELL ["powershell","-NoLogo","-ExecutionPolicy","Bypass","-Command"]
+
+ENV RUSTUP_HOME=C:\rust\rustup \
+    CARGO_HOME=C:\rust\cargo \
+    PATH=C:\rust\cargo\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\
+
+RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 ; \
+    Invoke-WebRequest https://static.rust-lang.org/rustup/init.exe -OutFile rustup-init.exe ; \
+    Start-Process .\rustup-init.exe -ArgumentList ('-y','--profile','minimal','--default-toolchain',"'+$env:RUST_VERSION+'") -NoNewWindow -Wait ; \
+    Remove-Item rustup-init.exe -Force ; \
+    rustc -V ; cargo -V
+
 WORKDIR C:\app
+
+COPY Cargo.toml Cargo.lock* .\
+
+RUN New-Item -ItemType Directory src | Out-Null; \
+    Set-Content -Path src\lib.rs -Value "fn main(){}"; \
+    cargo build --release || echo "(Ignoring expected build failure during dependency fetch warm-up)"
+
 COPY . .
+RUN cargo build --release --locked
 
-RUN set RUSTFLAGS= && cargo build --release
-
-# Runtime stage
+# Runtime Stage
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
+SHELL ["powershell","-NoLogo","-ExecutionPolicy","Bypass","-Command"]
 WORKDIR C:\app
 
-COPY --from=builder C:/app/target/release/resonix-node.exe C:/app/resonix-node.exe
-COPY --from=builder C:/Windows/System32/vcruntime140.dll C:/Windows/System32/vcruntime140.dll
-COPY --from=builder C:/Windows/System32/vcruntime140_1.dll C:/Windows/System32/vcruntime140_1.dll
-COPY --from=builder C:/Windows/System32/msvcp140.dll C:/Windows/System32/msvcp140.dll
-
+COPY --from=builder C:\app\target\release\resonix-node.exe C:\app\resonix-node.exe
 COPY assets/ /app/assets/
-EXPOSE 0-65535
+
 ENV RUST_LOG=info
-ENTRYPOINT ["C:/app/resonix-node.exe"]
+EXPOSE 0-65535
+
+ENTRYPOINT ["C:\\app\\resonix-node.exe"]
