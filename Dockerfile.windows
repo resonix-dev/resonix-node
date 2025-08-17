@@ -1,0 +1,17 @@
+# Builder stage (Windows)
+FROM rust:1.89 AS builder
+SHELL ["cmd", "/S", "/C"]
+WORKDIR C:\app
+COPY . .
+
+RUN cargo build --release
+
+# Runtime stage
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
+WORKDIR C:\app
+
+COPY --from=builder C:/app/target/release/resonix-node.exe C:/app/resonix-node.exe
+COPY assets/ /app/assets/
+EXPOSE 0-65535
+ENV RUST_LOG=info
+ENTRYPOINT ["C:/app/resonix-node.exe"]
