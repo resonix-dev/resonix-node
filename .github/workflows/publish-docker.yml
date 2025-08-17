@@ -23,10 +23,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
+        id: get-version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RAW_TAG="${{ github.event.release.tag_name }}"
+            VERSION="${RAW_TAG#v}" # strip leading v if present
+          else
+            VERSION=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          fi
+          echo "Resolved version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/resonix-node:latest
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/resonix-node:latest
+            ghcr.io/${{ github.repository_owner }}/resonix-node:${{ steps.get-version.outputs.version }}
