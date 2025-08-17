@@ -186,10 +186,10 @@ pub fn load_config() -> EffectiveConfig {
     let config_exists = config_paths.iter().any(|path| std::path::Path::new(path).exists());
 
     if !config_exists {
-        if let Err(e) = std::fs::write("resonix.toml", DEFAULT_CONFIG_TEMPLATE) {
+        if let Err(e) = std::fs::write("Resonix.toml", DEFAULT_CONFIG_TEMPLATE) {
             tracing::warn!(?e, "Failed to create default config file");
         } else {
-            tracing::info!("Created default config file at resonix.toml");
+            tracing::info!("Created default config file at Resonix.toml");
         }
     }
 
