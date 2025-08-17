@@ -7,7 +7,7 @@ ENV RUSTUP_HOME=C:\rust\rustup \
     CARGO_HOME=C:\rust\cargo \
     PATH=C:\rust\cargo\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\
 
-RUN $ProgressPreference = 'SilentlyContinue'; \
+RUN Write-Host 'Rust setup'; $ProgressPreference = 'SilentlyContinue'; \
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
     Invoke-WebRequest https://static.rust-lang.org/rustup/init.exe -OutFile rustup-init.exe; \
     Start-Process -FilePath .\rustup-init.exe -ArgumentList @('-y','--profile','minimal','--default-toolchain', $env:RUST_VERSION) -NoNewWindow -Wait; \
