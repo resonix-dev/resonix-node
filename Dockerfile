@@ -1,11 +1,11 @@
 # Builder stage (Linux)
-# Use full semantic version (must match workflow env) to avoid pulling a non-existent tag due to truncation.
-ARG RUST_VERSION=1.80.0
+ARG RUST_VERSION=1.89
 FROM rust:${RUST_VERSION} AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release
 
+# Runtime stage
 FROM debian:bullseye-slim
 WORKDIR /app
 COPY --from=builder /app/target/release/resonix-node /app/resonix-node
