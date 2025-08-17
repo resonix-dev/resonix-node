@@ -30,8 +30,9 @@ SHELL ["powershell","-NoLogo","-ExecutionPolicy","Bypass","-Command"]
 WORKDIR C:\app
 
 COPY --from=builder C:\app\target\release\resonix-node.exe C:\app\resonix-node.exe
-COPY assets C:\app\assets
+COPY assets/ /app/assets/
 
 ENV RUST_LOG=info
+EXPOSE 0-65535
 
 ENTRYPOINT ["C:\\app\\resonix-node.exe"]
