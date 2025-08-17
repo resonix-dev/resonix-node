@@ -4,102 +4,29 @@ on:
   release:
     types: [created]
 
-env:
-  # Quote to prevent YAML from treating 1.80 as a float (becoming 1.8) which broke rust image tag resolution
-  RUST_VERSION: "1.80.0"
-
 jobs:
-  detect-windows-dockerfile:
-    runs-on: ubuntu-latest
-    outputs:
-      has_dockerfile: ${{ steps.check.outputs.has }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - id: check
-        name: Check for Dockerfile.windows
-        run: |
-          if [ -f Dockerfile.windows ]; then
-            echo "has=true" >> $GITHUB_OUTPUT
-          else
-            echo "has=false" >> $GITHUB_OUTPUT
-          fi
-
-  linux-build:
+  build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      id-token: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Linux images (multi-arch)
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.linux
+          file: ./Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: ghcr.io/${{ github.repository_owner }}/resonix-node:linux-latest
-          build-args: |
-            RUST_VERSION=${{ env.RUST_VERSION }}
-
-  windows-build:
-    needs: detect-windows-dockerfile
-    if: needs.detect-windows-dockerfile.outputs.has_dockerfile == 'true'
-    runs-on: windows-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build Windows image (amd64)
-        run: |
-          docker build -f Dockerfile.windows -t ghcr.io/${{ github.repository_owner }}/resonix-node:windows-latest --build-arg RUST_VERSION=${{ env.RUST_VERSION }} .
-      - name: Push Windows image
-        run: |
-          docker push ghcr.io/${{ github.repository_owner }}/resonix-node:windows-latest
-
-  create-manifest:
-    needs: [linux-build, windows-build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create and push manifest (latest)
-        run: |
-          set -e
-          # If windows build succeeded, include both; else only linux
-          if [ "${{ needs.windows-build.result }}" = "success" ]; then
-            docker buildx imagetools create \
-              -t ghcr.io/${{ github.repository_owner }}/resonix-node:latest \
-              ghcr.io/${{ github.repository_owner }}/resonix-node:linux-latest \
-              ghcr.io/${{ github.repository_owner }}/resonix-node:windows-latest
-          else
-            docker buildx imagetools create \
-              -t ghcr.io/${{ github.repository_owner }}/resonix-node:latest \
-              ghcr.io/${{ github.repository_owner }}/resonix-node:linux-latest
-          fi
-          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/resonix-node:latest
+          tags: ghcr.io/${{ github.repository_owner }}/resonix-node:latest
