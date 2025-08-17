@@ -1,4 +1,6 @@
-FROM rust:1.89 AS builder
+# Builder stage (Linux)
+ARG RUST_VERSION=1.80
+FROM rust:${RUST_VERSION} AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release
