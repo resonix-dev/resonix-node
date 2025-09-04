@@ -12,6 +12,7 @@ Features
 - Lightweight EQ and volume filters
 - Minimal authentication via static password header
 - First-run auto-download of `yt-dlp` and `ffmpeg` into a user cache (`~/.resonix/bin`) keeping the executable slim
+- Automatic cleanup of downloaded/transcoded temp audio files when not looping; best‑effort cleanup on shutdown
 
 ### Status
 Early preview. APIs may evolve. See License (BSD-3-Clause).
@@ -131,6 +132,7 @@ macOS: `ffmpeg` is not auto-downloaded (install via Homebrew: `brew install ffmp
 Notes
 - The resolver downloads temporary audio files using `yt-dlp`. Ensure sufficient disk space and legal use in your jurisdiction.
 - For sources needing remux/extraction, `ffmpeg` is required.
+ - Cleanup: If loop mode is not enabled (neither `track` nor `queue`), Resonix deletes any temporary audio file it created for the finished track. On process shutdown, Resonix also best‑effort removes leftover temp files with the `resonix_` prefix from the OS temp directory.
 
 ---
 

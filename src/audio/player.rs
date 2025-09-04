@@ -1,12 +1,12 @@
 use crate::audio::{
     decoder::SymphoniaDecoder,
     dsp::{biquad_eq_in_place, update_eq_filters, Filters},
-    source::{prepare_local_source, transcode_to_mp3},
+    source::{is_resonix_temp_file, prepare_local_source, transcode_to_mp3},
     track::{LoopMode, TrackItem},
 };
 use anyhow::Result;
 use bytes::Bytes;
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, Mutex};
 use tracing::warn;
 
@@ -74,6 +74,10 @@ impl Player {
         let mut current_uri = self.uri.clone();
         'session: loop {
             let source_path = prepare_local_source(&current_uri).await?;
+            let mut temp_paths: Vec<PathBuf> = Vec::new();
+            if is_resonix_temp_file(&source_path) {
+                temp_paths.push(source_path.clone());
+            }
             {
                 let mut ti = self.track_info.lock().await;
                 ti.title =
@@ -92,6 +96,7 @@ impl Player {
                     if msg.contains("unsupported codec") || msg.contains("unsupported feature") {
                         warn!(%msg, "ffmpeg fallback");
                         let mp3 = transcode_to_mp3(&source_path).await?;
+                        temp_paths.push(mp3.clone());
                         SymphoniaDecoder::open(&mp3)?
                     } else {
                         return Err(e);
@@ -174,6 +179,15 @@ impl Player {
                 }
             }
             let _ = self.event_tx.send(PlayerEvent::TrackEnd { id: self.id.clone() });
+
+            // If not looping (neither track nor queue), delete temp audio files created for this track.
+            // We only delete files that we can confidently identify as Resonix-created temp files.
+            let loop_mode = *self.loop_mode.lock().await;
+            if matches!(loop_mode, LoopMode::None) {
+                for p in temp_paths {
+                    let _ = tokio::fs::remove_file(p).await;
+                }
+            }
             if let Some(next) = self.next_track_uri(skipped).await {
                 current_uri = next;
                 continue;

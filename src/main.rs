@@ -126,6 +126,9 @@ async fn main() -> Result<()> {
         _ = shutdown_rx.recv() => { info!("Shutdown signal received"); }
     }
 
+    // Best-effort cleanup of temporary audio files created during runtime.
+    crate::audio::source::cleanup_resonix_temp_files();
+
     Ok(())
 }
 

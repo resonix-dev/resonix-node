@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::{
+    fs,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -73,4 +74,32 @@ pub async fn transcode_to_mp3(input: &Path) -> Result<PathBuf> {
         anyhow::bail!("ffmpeg produced empty file");
     }
     Ok(out_path)
+}
+
+pub fn is_resonix_temp_file(path: &Path) -> bool {
+    let tmp_dir = std::env::temp_dir();
+    if let Ok(p) = path.canonicalize() {
+        if let Ok(t) = tmp_dir.canonicalize() {
+            if p.starts_with(t) {
+                if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                    return name.starts_with("resonix_");
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn cleanup_resonix_temp_files() {
+    let tmp_dir = std::env::temp_dir();
+    if let Ok(read_dir) = fs::read_dir(&tmp_dir) {
+        for entry in read_dir.flatten() {
+            let p = entry.path();
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("resonix_") {
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
+    }
 }
