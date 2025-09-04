@@ -1,6 +1,6 @@
 [package]
 name = "resonix-node"
-version = "0.3.0"
+version = "0.2.8"
 edition = "2021"
 description = "High-performance audio node. HTTP/WebSocket server that resolves and streams audio using Symphonia and yt-dlp."
 license = "BSD-3-Clause"
