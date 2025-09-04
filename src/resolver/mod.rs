@@ -1,3 +1,4 @@
+use crate::utils::enc::encrypt_file_in_place;
 use anyhow::{anyhow, Context, Result};
 use rspotify::{model::TrackId, prelude::BaseClient, ClientCredsSpotify, Credentials};
 use serde::Deserialize;
@@ -139,6 +140,27 @@ pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<Str
     anyhow::bail!("Failed to resolve URL to direct audio")
 }
 
+pub async fn resolve_with_retry(cfg: &EffectiveConfig, input: &str) -> Result<String> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=3 {
+        match resolve_to_direct(cfg, input).await {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                let em = e.to_string();
+                if em.contains("probe") || em.contains("ffmpeg") || em.contains("unsupported feature") {
+                    last_err = Some(e);
+                    let delay_ms = 250 * attempt;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("resolve failed after retries")))
+}
+
 async fn run_yt_dlp(cfg: &EffectiveConfig, args: &[&str]) -> Result<String> {
     let bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
     let mut cmd = Command::new(bin);
@@ -190,6 +212,7 @@ pub async fn download_with_ytdlp_to_temp(
     if meta.len() == 0 {
         anyhow::bail!("yt-dlp created empty file");
     }
+    encrypt_file_in_place(std::path::Path::new(&out_path)).context("encrypt ytdlp temp file")?;
     Ok(out_path)
 }
 
@@ -216,6 +239,7 @@ async fn download_with_ytdlp_mp3(cfg: &EffectiveConfig, input: &str) -> Result<S
     if meta.len() == 0 {
         anyhow::bail!("yt-dlp created empty mp3 file");
     }
+    encrypt_file_in_place(std::path::Path::new(&out_path)).context("encrypt ytdlp mp3 temp file")?;
     Ok(out_path)
 }
 

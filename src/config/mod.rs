@@ -193,7 +193,6 @@ pub fn load_config() -> EffectiveConfig {
         }
     }
 
-    // Try to load existing or newly created config
     if let Ok(contents) =
         std::fs::read_to_string("resonix.toml").or_else(|_| std::fs::read_to_string("Resonix.toml"))
     {

@@ -1,3 +1,4 @@
+use crate::utils::enc::{is_encrypted_file, read_decrypted_file};
 use anyhow::{anyhow, Result};
 use symphonia::core::audio::Signal;
 use tracing::{debug, warn};
@@ -15,18 +16,31 @@ pub struct SymphoniaDecoder {
     resampler: Option<LinearResampler>,
     out_l: Vec<f32>,
     out_r: Vec<f32>,
+    temp_plain_path: Option<std::path::PathBuf>,
 }
 
 impl SymphoniaDecoder {
     pub fn open(path: &std::path::PathBuf) -> Result<Self> {
-        use std::fs::File;
+    use std::fs::File;
         use symphonia::core::{
             codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions,
             probe::Hint,
         };
 
-        let file = File::open(path).map_err(|e| anyhow!("open source: {e}"))?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut temp_plain_path: Option<std::path::PathBuf> = None;
+            let mss = if is_encrypted_file(path) {
+                let data = read_decrypted_file(path)?;
+                let mut t = tempfile::Builder::new().prefix("resonix_dec_").tempfile()?;
+                use std::io::Write;
+                t.as_file_mut().write_all(&data)?;
+                let p = t.into_temp_path().keep()?;
+                temp_plain_path = Some(p.clone());
+                let file = File::open(&p).map_err(|e| anyhow!("open tmp source: {e}"))?;
+                MediaSourceStream::new(Box::new(file), Default::default())
+            } else {
+            let file = File::open(path).map_err(|e| anyhow!("open source: {e}"))?;
+            MediaSourceStream::new(Box::new(file), Default::default())
+        };
 
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
@@ -59,6 +73,7 @@ impl SymphoniaDecoder {
             resampler,
             out_l: Vec::with_capacity(48_000),
             out_r: Vec::with_capacity(48_000),
+            temp_plain_path,
         })
     }
 
@@ -138,7 +153,8 @@ impl SymphoniaDecoder {
                     }
                 };
 
-                let (mut l, mut r) = downmix_to_stereo(&mut ch_data, frames, self.chan_count);
+                let src_ch_count = ch_data.len();
+                let (mut l, mut r) = downmix_to_stereo(&mut ch_data, frames, src_ch_count);
                 debug!(in_frames = frames, out_l = l.len(), out_r = r.len(), "downmixed to stereo");
 
                 if let Some(res) = &mut self.resampler {
@@ -161,6 +177,14 @@ impl SymphoniaDecoder {
         let l = std::mem::take(&mut self.out_l);
         let r = std::mem::take(&mut self.out_r);
         Ok(Some(PcmBlock { l, r }))
+    }
+}
+
+impl Drop for SymphoniaDecoder {
+    fn drop(&mut self) {
+        if let Some(p) = self.temp_plain_path.take() {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
 

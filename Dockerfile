@@ -1,6 +1,6 @@
 # Builder stage (Linux)
 ARG RUST_VERSION=1.89
-FROM rust:${RUST_VERSION} AS builder
+FROM rust:${RUST_VERSION}-bullseye AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release

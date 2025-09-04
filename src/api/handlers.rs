@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 use crate::audio::player::{EqBandParam, Player};
 use crate::audio::track::LoopMode;
 use crate::config::{resolver_enabled, EffectiveConfig};
-use crate::resolver::{is_uri_allowed, needs_resolve, resolve_to_direct};
+use crate::resolver::{is_uri_allowed, needs_resolve, resolve_to_direct, resolve_with_retry};
 use crate::state::AppState;
 use axum::extract::Query;
 use base64::Engine;
@@ -45,7 +45,30 @@ pub async fn create_player(
     Json(req): Json<CreatePlayerReq>,
 ) -> Result<impl IntoResponse, StatusCode> {
     if state.players.contains_key(&req.id) {
-        return Err(StatusCode::CONFLICT);
+        let p = state.players.get(&req.id).ok_or(StatusCode::NOT_FOUND)?;
+        if !is_uri_allowed(&state.cfg, &req.uri) {
+            warn!(uri=%req.uri, "URI blocked by config patterns");
+            return Err(StatusCode::FORBIDDEN);
+        }
+        let mut uri = req.uri.clone();
+        let mut prepared_path: Option<String> = None;
+        if (needs_resolve(&uri) && resolver_enabled(&state.cfg)) || resolver_enabled(&state.cfg) {
+            match resolve_with_retry(&state.cfg, &uri).await {
+                Ok(direct) => {
+                    info!(%uri, %direct, "resolved page URL to direct stream");
+                    if std::path::Path::new(&direct).exists() {
+                        prepared_path = Some(direct.clone());
+                    }
+                    uri = direct;
+                }
+                Err(e) => {
+                    warn!(%uri, ?e, "resolver failed; enqueuing original URI");
+                }
+            }
+        }
+        let md = req.metadata.unwrap_or_else(|| serde_json::json!({}));
+        let _track_id = p.enqueue_prepared(uri.clone(), prepared_path, md).await;
+        return Ok((StatusCode::OK, Json(CreatePlayerRes { id: req.id })));
     }
 
     if !is_uri_allowed(&state.cfg, &req.uri) {
@@ -71,7 +94,7 @@ pub async fn create_player(
 
     let mut uri = req.uri.clone();
     if (needs_resolve(&uri) && resolver_enabled(&state.cfg)) || resolver_enabled(&state.cfg) {
-        match resolve_to_direct(&state.cfg, &uri).await {
+        match resolve_with_retry(&state.cfg, &uri).await {
             Ok(direct) => {
                 info!(%uri, %direct, "resolved page URL to direct stream");
                 uri = direct;
@@ -82,7 +105,7 @@ pub async fn create_player(
         }
     }
 
-    let player = Player::new(&req.id, &uri).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let player = Player::new(&req.id, &uri, state.cfg.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     let player = std::sync::Arc::new(player);
     if let Some(md) = req.metadata {
         player.set_metadata(md).await;
@@ -239,7 +262,20 @@ pub async fn enqueue(
         return Err(StatusCode::FORBIDDEN);
     }
     let md = req.metadata.unwrap_or_else(|| serde_json::json!({}));
-    let track_id = p.enqueue(req.uri.clone(), md).await;
+    let mut prepared_path: Option<String> = None;
+    if needs_resolve(&req.uri) && crate::config::resolver_enabled(&state.cfg) {
+        match resolve_with_retry(&state.cfg, &req.uri).await {
+            Ok(res) => {
+                if std::path::Path::new(&res).exists() {
+                    prepared_path = Some(res);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(uri=%req.uri, ?e, "prefetch resolve failed; enqueued without prepared path");
+            }
+        }
+    }
+    let track_id = p.enqueue_prepared(req.uri.clone(), prepared_path, md).await;
     Ok((StatusCode::CREATED, Json(serde_json::json!({"trackId": track_id}))))
 }
 
