@@ -4,6 +4,7 @@ use crate::audio::{
     source::{is_resonix_temp_file, prepare_local_source, transcode_to_mp3},
     track::{LoopMode, TrackItem},
 };
+use crate::config::EffectiveConfig;
 use anyhow::Result;
 use bytes::Bytes;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -43,10 +44,11 @@ pub struct Player {
     queue: Arc<Mutex<Vec<TrackItem>>>,
     loop_mode: Arc<Mutex<LoopMode>>,
     event_tx: broadcast::Sender<PlayerEvent>,
+    cfg: std::sync::Arc<EffectiveConfig>,
 }
 
 impl Player {
-    pub fn new(id: &str, uri: &str) -> Result<Self> {
+    pub fn new(id: &str, uri: &str, cfg: std::sync::Arc<EffectiveConfig>) -> Result<Self> {
         let (pause_tx, _) = broadcast::channel(8);
         let (stop_tx, _) = broadcast::channel(1);
         let (skip_tx, _) = broadcast::channel(8);
@@ -67,13 +69,27 @@ impl Player {
             queue: Arc::new(Mutex::new(Vec::new())),
             loop_mode: Arc::new(Mutex::new(LoopMode::None)),
             event_tx,
+            cfg,
         })
     }
 
     pub async fn run(self: Arc<Self>) -> Result<()> {
         let mut current_uri = self.uri.clone();
+        let mut current_prepared: Option<PathBuf> = None;
         'session: loop {
-            let source_path = prepare_local_source(&current_uri).await?;
+            let source_path = if let Some(p) = current_prepared.take() {
+                p
+            } else {
+                let resolved_uri = if crate::config::resolver_enabled(&self.cfg) {
+                    match crate::resolver::resolve_with_retry(&self.cfg, &current_uri).await {
+                        Ok(s) => s,
+                        Err(_) => current_uri.clone(),
+                    }
+                } else {
+                    current_uri.clone()
+                };
+                prepare_local_source(&resolved_uri).await?
+            };
             let mut temp_paths: Vec<PathBuf> = Vec::new();
             if is_resonix_temp_file(&source_path) {
                 temp_paths.push(source_path.clone());
@@ -89,15 +105,97 @@ impl Player {
             }
             let _ =
                 self.event_tx.send(PlayerEvent::TrackStart { id: self.id.clone(), uri: current_uri.clone() });
-            let mut decoder = match SymphoniaDecoder::open(&source_path) {
+            let mut actual_source = source_path.clone();
+            let mut decoder = match SymphoniaDecoder::open(&actual_source) {
                 Ok(d) => d,
                 Err(e) => {
                     let msg = e.to_string();
                     if msg.contains("unsupported codec") || msg.contains("unsupported feature") {
                         warn!(%msg, "ffmpeg fallback");
-                        let mp3 = transcode_to_mp3(&source_path).await?;
-                        temp_paths.push(mp3.clone());
-                        SymphoniaDecoder::open(&mp3)?
+                        match transcode_to_mp3(&actual_source).await {
+                            Ok(mp3) => {
+                                temp_paths.push(mp3.clone());
+                                match SymphoniaDecoder::open(&mp3) {
+                                    Ok(d) => d,
+                                    Err(e2) => {
+                                        let _ = e2;
+
+                                        for p in temp_paths.drain(..) {
+                                            let _ = tokio::fs::remove_file(p).await;
+                                        }
+                                        if crate::config::resolver_enabled(&self.cfg) {
+                                            if let Ok(new_uri) =
+                                                crate::resolver::resolve_with_retry(&self.cfg, &current_uri)
+                                                    .await
+                                            {
+                                                actual_source = prepare_local_source(&new_uri).await?;
+                                                if is_resonix_temp_file(&actual_source) {
+                                                    temp_paths.push(actual_source.clone());
+                                                }
+                                                match SymphoniaDecoder::open(&actual_source) {
+                                                    Ok(d3) => d3,
+                                                    Err(e3) => {
+                                                        let m3 = e3.to_string();
+                                                        if m3.contains("unsupported codec")
+                                                            || m3.contains("unsupported feature")
+                                                        {
+                                                            let mp3b =
+                                                                transcode_to_mp3(&actual_source).await?;
+                                                            temp_paths.push(mp3b.clone());
+                                                            SymphoniaDecoder::open(&mp3b)?
+                                                        } else {
+                                                            return Err(e3);
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                return Err(anyhow::anyhow!(
+                                                    "resolve retry failed after ffmpeg error"
+                                                ));
+                                            }
+                                        } else {
+                                            return Err(anyhow::anyhow!(
+                                                "decoder fallback failed and resolver disabled"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e_ff) => {
+                                for p in temp_paths.drain(..) {
+                                    let _ = tokio::fs::remove_file(p).await;
+                                }
+                                if crate::config::resolver_enabled(&self.cfg) {
+                                    if let Ok(new_uri) =
+                                        crate::resolver::resolve_with_retry(&self.cfg, &current_uri).await
+                                    {
+                                        actual_source = prepare_local_source(&new_uri).await?;
+                                        if is_resonix_temp_file(&actual_source) {
+                                            temp_paths.push(actual_source.clone());
+                                        }
+                                        match SymphoniaDecoder::open(&actual_source) {
+                                            Ok(d3) => d3,
+                                            Err(e3) => {
+                                                let m3 = e3.to_string();
+                                                if m3.contains("unsupported codec")
+                                                    || m3.contains("unsupported feature")
+                                                {
+                                                    let mp3b = transcode_to_mp3(&actual_source).await?;
+                                                    temp_paths.push(mp3b.clone());
+                                                    SymphoniaDecoder::open(&mp3b)?
+                                                } else {
+                                                    return Err(e3);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        return Err(e_ff);
+                                    }
+                                } else {
+                                    return Err(e_ff);
+                                }
+                            }
+                        }
                     } else {
                         return Err(e);
                     }
@@ -180,16 +278,15 @@ impl Player {
             }
             let _ = self.event_tx.send(PlayerEvent::TrackEnd { id: self.id.clone() });
 
-            // If not looping (neither track nor queue), delete temp audio files created for this track.
-            // We only delete files that we can confidently identify as Resonix-created temp files.
             let loop_mode = *self.loop_mode.lock().await;
             if matches!(loop_mode, LoopMode::None) {
                 for p in temp_paths {
                     let _ = tokio::fs::remove_file(p).await;
                 }
             }
-            if let Some(next) = self.next_track_uri(skipped).await {
-                current_uri = next;
+            if let Some((next_uri, next_prepared)) = self.next_track(skipped).await {
+                current_uri = next_uri;
+                current_prepared = next_prepared.map(PathBuf::from);
                 continue;
             } else {
                 break 'session;
@@ -266,9 +363,23 @@ impl Player {
     pub async fn track_info_snapshot(&self) -> InternalTrackInfo {
         self.track_info.lock().await.clone()
     }
+    #[allow(dead_code)]
     pub async fn enqueue(&self, uri: String, metadata: serde_json::Value) -> String {
         let mut q = self.queue.lock().await;
         let item = TrackItem::new(&uri, metadata);
+        let id = item.id.clone();
+        q.push(item);
+        let _ = self.event_tx.send(PlayerEvent::QueueUpdate);
+        id
+    }
+    pub async fn enqueue_prepared(
+        &self,
+        uri: String,
+        prepared_path: Option<String>,
+        metadata: serde_json::Value,
+    ) -> String {
+        let mut q = self.queue.lock().await;
+        let item = TrackItem::new_with_prepared(&uri, prepared_path, metadata);
         let id = item.id.clone();
         q.push(item);
         let _ = self.event_tx.send(PlayerEvent::QueueUpdate);
@@ -278,26 +389,27 @@ impl Player {
         *self.loop_mode.lock().await = mode;
         let _ = self.event_tx.send(PlayerEvent::LoopModeChange(mode));
     }
-    async fn next_track_uri(&self, skipped: bool) -> Option<String> {
+    async fn next_track(&self, skipped: bool) -> Option<(String, Option<String>)> {
         let mut q = self.queue.lock().await;
         let mode = *self.loop_mode.lock().await;
         if mode == LoopMode::Track && !skipped {
-            return Some(self.track_identifier());
+            return Some((self.track_identifier(), None));
         }
         if q.is_empty() {
             return None;
         }
         match mode {
-            LoopMode::Track => Some(self.track_identifier()),
+            LoopMode::Track => Some((self.track_identifier(), None)),
             LoopMode::Queue => {
                 let item = q.remove(0);
                 let uri = item.uri.clone();
+                let prepared = item.prepared_path.clone();
                 q.push(item);
-                Some(uri)
+                Some((uri, prepared))
             }
             LoopMode::None => {
                 let item = q.remove(0);
-                Some(item.uri)
+                Some((item.uri, item.prepared_path))
             }
         }
     }

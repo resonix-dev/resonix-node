@@ -1,3 +1,4 @@
+use crate::utils::enc::{encrypt_file_in_place, is_encrypted_file, read_decrypted_file};
 use anyhow::{anyhow, Context, Result};
 use std::{
     fs,
@@ -28,6 +29,7 @@ pub async fn prepare_local_source(uri: &str) -> Result<PathBuf> {
                 let mut tmp = tempfile::Builder::new().prefix("resonix_").tempfile()?;
                 tmp.as_file_mut().write_all(&body)?;
                 let path = tmp.into_temp_path().keep()?;
+                encrypt_file_in_place(&path).context("encrypt http temp file")?;
                 return Ok(path);
             }
             _ => {}
@@ -48,11 +50,22 @@ pub async fn transcode_to_mp3(input: &Path) -> Result<PathBuf> {
     let out_path = tmp.path().to_path_buf();
     drop(tmp);
 
+    let mut input_arg_path: PathBuf = input.to_path_buf();
+    let mut plaintext_tmp: Option<PathBuf> = None;
+    if is_encrypted_file(input) {
+        let data = read_decrypted_file(input)?;
+        let mut t = tempfile::Builder::new().prefix("resonix_ffin_").tempfile()?;
+        t.as_file_mut().write_all(&data)?;
+        let p = t.into_temp_path().keep()?;
+        input_arg_path = p.clone();
+        plaintext_tmp = Some(p);
+    }
+
     let ffmpeg_bin = std::env::var("RESONIX_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
     let status = tokio::process::Command::new(ffmpeg_bin)
         .arg("-y")
         .arg("-i")
-        .arg(input)
+        .arg(&input_arg_path)
         .arg("-vn")
         .arg("-acodec")
         .arg("libmp3lame")
@@ -65,6 +78,10 @@ pub async fn transcode_to_mp3(input: &Path) -> Result<PathBuf> {
         .await
         .context("run ffmpeg to transcode to mp3")?;
 
+    if let Some(p) = plaintext_tmp.take() {
+        let _ = tokio::fs::remove_file(p).await;
+    }
+
     if !status.success() {
         anyhow::bail!("ffmpeg failed with status {status}");
     }
@@ -73,6 +90,7 @@ pub async fn transcode_to_mp3(input: &Path) -> Result<PathBuf> {
     if meta.len() == 0 {
         anyhow::bail!("ffmpeg produced empty file");
     }
+    encrypt_file_in_place(&out_path).context("encrypt transcoded mp3")?;
     Ok(out_path)
 }
 
