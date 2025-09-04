@@ -21,23 +21,23 @@ pub struct SymphoniaDecoder {
 
 impl SymphoniaDecoder {
     pub fn open(path: &std::path::PathBuf) -> Result<Self> {
-    use std::fs::File;
+        use std::fs::File;
         use symphonia::core::{
             codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions,
             probe::Hint,
         };
 
         let mut temp_plain_path: Option<std::path::PathBuf> = None;
-            let mss = if is_encrypted_file(path) {
-                let data = read_decrypted_file(path)?;
-                let mut t = tempfile::Builder::new().prefix("resonix_dec_").tempfile()?;
-                use std::io::Write;
-                t.as_file_mut().write_all(&data)?;
-                let p = t.into_temp_path().keep()?;
-                temp_plain_path = Some(p.clone());
-                let file = File::open(&p).map_err(|e| anyhow!("open tmp source: {e}"))?;
-                MediaSourceStream::new(Box::new(file), Default::default())
-            } else {
+        let mss = if is_encrypted_file(path) {
+            let data = read_decrypted_file(path)?;
+            let mut t = tempfile::Builder::new().prefix("resonix_dec_").tempfile()?;
+            use std::io::Write;
+            t.as_file_mut().write_all(&data)?;
+            let p = t.into_temp_path().keep()?;
+            temp_plain_path = Some(p.clone());
+            let file = File::open(&p).map_err(|e| anyhow!("open tmp source: {e}"))?;
+            MediaSourceStream::new(Box::new(file), Default::default())
+        } else {
             let file = File::open(path).map_err(|e| anyhow!("open source: {e}"))?;
             MediaSourceStream::new(Box::new(file), Default::default())
         };

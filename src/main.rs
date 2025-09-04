@@ -43,16 +43,34 @@ async fn main() -> Result<()> {
         crate::cli::CliAction::RunServer => { /* continue */ }
     }
     let cfg = load_config();
-    let logs_dir = std::path::Path::new(".logs");
-    if !logs_dir.exists() {
-        let _ = std::fs::create_dir_all(logs_dir);
-    }
-    if cfg.clean_log_on_start {
-        let log_path = logs_dir.join("latest.log");
-        if let Ok(f) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
-            drop(f);
+    let logs_dir_str = std::env::var("RESONIX_LOG_DIR").unwrap_or_else(|_| ".logs".into());
+    let logs_dir = std::path::Path::new(&logs_dir_str);
+
+    let stdout_layer = fmt::layer().with_target(false).compact();
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry().with(env_filter).with(stdout_layer);
+
+    match std::fs::create_dir_all(logs_dir) {
+        Ok(()) => {
+            if cfg.clean_log_on_start {
+                let log_path = logs_dir.join("latest.log");
+                if let Ok(f) =
+                    std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&log_path)
+                {
+                    drop(f);
+                }
+            }
+            let file_appender = rolling::never(logs_dir, "latest.log");
+            let (file_nb, _guard_file) = tracing_appender::non_blocking(file_appender);
+            let file_layer = fmt::layer().with_ansi(false).with_target(false).with_writer(file_nb).compact();
+            registry.with(file_layer).init();
+        }
+        Err(e) => {
+            eprintln!("File logging disabled (cannot create {}): {}", logs_dir.display(), e);
+            registry.init();
         }
     }
+
     let file_appender = rolling::never(".logs", "latest.log");
     let (file_nb, _guard_file) = tracing_appender::non_blocking(file_appender);
     let stdout_layer = fmt::layer().with_target(false).compact();
