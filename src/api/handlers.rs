@@ -506,9 +506,6 @@ pub async fn ws_stream(
 }
 
 async fn ws_task(mut socket: axum::extract::ws::WebSocket, mut rx: tokio::sync::broadcast::Receiver<Bytes>) {
-    if socket.send(axum::extract::ws::Message::Binary(Bytes::from(vec![0u8; 3840]))).await.is_err() {
-        return;
-    }
     let mut ws_forwarded: u64 = 0;
     loop {
         tokio::select! {

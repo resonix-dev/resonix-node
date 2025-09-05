@@ -18,6 +18,12 @@
 				"$rustc"
 			],
 			"group": "build"
+		},
+		{
+			"label": "debug: cargo build",
+			"type": "shell",
+			"command": "cargo build",
+			"group": "build"
 		}
 	]
 }

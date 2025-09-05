@@ -71,13 +71,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    let file_appender = rolling::never(".logs", "latest.log");
-    let (file_nb, _guard_file) = tracing_appender::non_blocking(file_appender);
-    let stdout_layer = fmt::layer().with_target(false).compact();
-    let file_layer = fmt::layer().with_ansi(false).with_target(false).with_writer(file_nb).compact();
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::registry().with(env_filter).with(stdout_layer).with(file_layer).init();
-
     if let Err(e) = check_startup_dependencies(&cfg).await {
         error!(?e, "Dependency check failed");
         std::process::exit(1);

@@ -23,9 +23,40 @@ pub fn key() -> &'static [u8; 32] {
                 }
             }
         }
+
+        let key_path = crate::utils::tools::tools_home_dir().join("enc.key");
+        if let Ok(mut f) = fs::File::open(&key_path) {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).is_ok() {
+                let candidate = if buf.len() == 32 {
+                    Some(buf)
+                } else {
+                    let s = String::from_utf8_lossy(&buf).trim().to_string();
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.decode(s).ok()
+                };
+                if let Some(bytes) = candidate {
+                    if bytes.len() == 32 {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&bytes);
+                        return arr;
+                    }
+                }
+            }
+        }
+
         let mut k = [0u8; 32];
         let mut rng = rand::rng();
         rng.fill_bytes(&mut k);
+
+        let dir = crate::utils::tools::tools_home_dir();
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("enc.key");
+        if let Ok(mut f) = fs::File::create(&path) {
+            let _ = f.write_all(&k);
+            let _ = f.flush();
+        }
+
         k
     })
 }
