@@ -61,15 +61,19 @@ jobs:
       - name: Install Linux aarch64 cross toolchain
         if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # Install the cross toolchain plus the target OpenSSL dev files so openssl-sys can link
+          sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config libssl-dev:arm64
         shell: bash
 
       - name: Install Linux armv7 cross toolchain
         if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
         run: |
+          sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
+          # Provide armv7 toolchain and OpenSSL dev headers/libs for the cross build
+          sudo apt-get install -y gcc-arm-linux-gnueabihf pkg-config libssl-dev:armhf
         shell: bash
 
       - name: Build
@@ -79,11 +83,19 @@ jobs:
             export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
             export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
           fi
           if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
             export CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
             export AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
             export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:${PKG_CONFIG_PATH:-}"
+            export OPENSSL_LIB_DIR=/usr/lib/arm-linux-gnueabihf
+            export OPENSSL_INCLUDE_DIR=/usr/include/arm-linux-gnueabihf
           fi
           cargo build --release --target ${{ matrix.target }}
         shell: bash
