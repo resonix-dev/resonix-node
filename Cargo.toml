@@ -37,6 +37,8 @@ rspotify = { version = "0.15.1", default-features = false, features = [
   "client-reqwest",
   "reqwest-rustls-tls",
 ] }
+# Force vendored OpenSSL for any transitive native-tls users to avoid system OpenSSL requirements on CI
+native-tls = { version = "0.2", features = ["vendored"] }
 dotenvy = "0.15"
 base64 = "0.22"
 uuid = { version = "1.18.1", features = ["v4"] }

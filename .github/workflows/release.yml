@@ -70,20 +70,6 @@ jobs:
       - name: Install Linux armv7 cross toolchain
         if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
         run: |
-          # Restrict default sources to amd64 so apt does not query non-existent armhf indices on security.ubuntu.com
-          sudo tee /etc/apt/sources.list >/dev/null <<'EOF'
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          EOF
-          sudo dpkg --add-architecture armhf
-          # Point armhf sources to ubuntu-ports; security.ubuntu.com lacks 32-bit indexes on 24.04
-          sudo tee /etc/apt/sources.list.d/ubuntu-armhf.list >/dev/null <<'EOF'
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF
           sudo apt-get update
           # Provide armv7 toolchain and OpenSSL dev headers/libs for the cross build
           sudo apt-get install -y gcc-arm-linux-gnueabihf pkg-config libssl-dev:armhf
@@ -98,8 +84,8 @@ jobs:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             export PKG_CONFIG_ALLOW_CROSS=1
             export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
-            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-            export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
+            export OPENSSL_NO_PKG_CONFIG=1
+            export OPENSSL_STATIC=1
           fi
           if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
             export CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
@@ -107,8 +93,8 @@ jobs:
             export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
             export PKG_CONFIG_ALLOW_CROSS=1
             export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:${PKG_CONFIG_PATH:-}"
-            export OPENSSL_LIB_DIR=/usr/lib/arm-linux-gnueabihf
-            export OPENSSL_INCLUDE_DIR=/usr/include/arm-linux-gnueabihf
+            export OPENSSL_NO_PKG_CONFIG=1
+            export OPENSSL_STATIC=1
           fi
           cargo build --release --target ${{ matrix.target }}
         shell: bash
