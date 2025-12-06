@@ -71,6 +71,12 @@ jobs:
         if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
         run: |
           sudo dpkg --add-architecture armhf
+          # Point armhf sources to ubuntu-ports; security.ubuntu.com lacks 32-bit indexes on 24.04
+          sudo tee /etc/apt/sources.list.d/ubuntu-armhf.list >/dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
           sudo apt-get update
           # Provide armv7 toolchain and OpenSSL dev headers/libs for the cross build
           sudo apt-get install -y gcc-arm-linux-gnueabihf pkg-config libssl-dev:armhf
