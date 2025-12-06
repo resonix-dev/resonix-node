@@ -1,17 +1,17 @@
 <div align="center">
 <img src="./assets/social/avatar-rounded.png" style="width: 100px; height: 100px;">
 <h1>Resonix Node</h1>
-<p>Low-latency audio node written in Rust. It exposes a HTTP API to create/manage audio players and a WebSocket that streams raw PCM for clients (e.g., Discord bots). An example Discord.js client is included in <a href="./examples/discord-js-bot">examples/discord-js-bot</a>.</p>
+<p>Low-latency relay-based audio node written in Rust. It exposes a HTTP API to create/manage audio players and a WebSocket that streams raw PCM for clients (e.g., Discord bots).</p>
 </div>
 
 Features
 - HTTP API for creating/controlling players
 - WebSocket PCM stream (48 kHz, stereo, 16-bit, 20 ms frames)
-- Optional resolving/downloading for YouTube/Spotify/SoundCloud links via yt-dlp
+- Optional resolver that turns YouTube/SoundCloud/Spotify links into direct stream URLs via the [Riva](https://github.com/resonix-dev/riva) crate
 - Allow/block URL patterns via regex
 - Lightweight EQ and volume filters
 - Minimal authentication via static password header
-- First-run auto-download of `yt-dlp` and `ffmpeg` into a user cache (`~/.resonix/bin`) keeping the executable slim
+- Robust decoding via the system `ffmpeg` binary (piped PCM, no intermediate files)
 - Automatic cleanup of downloaded/transcoded temp audio files when not looping; best‑effort cleanup on shutdown
 
 ### Status
@@ -88,11 +88,9 @@ TOML sections and keys
 
 - `[resolver]`
 	- `enabled` (bool) → default `false`
-	- `ytdlp_path` (string) → default `"yt-dlp"` (can be overridden by `YTDLP_PATH` env)
-	- `ffmpeg_path` (string, optional) → default `"ffmpeg"` (can be overridden by `FFMPEG_PATH` env)
+	- `ffmpeg_path` (string, optional) → default `"ffmpeg"`. If the binary is missing Resonix downloads the newest BtbN build into `~/.resonix/bin` (or `%USERPROFILE%\.resonix\bin`) and rewrites this path automatically. You can still override it via `FFMPEG_PATH`.
 	- `timeout_ms` (u64) → default `20000`
-	- `preferred_format` (string) → default `"140"` (m4a)
-	- `allow_spotify_title_search` (bool) → default `true` (resolves Spotify URLs via title search)
+	- `allow_spotify_title_search` (bool) → default `true` (permits YouTube search fallback for Spotify URLs)
 
 - `[spotify]`
 	- `client_id` (string, optional) → Either the literal client id OR the NAME of an env var containing it.
@@ -105,40 +103,17 @@ TOML sections and keys
 
 Environment overrides
 - `RESONIX_RESOLVE=1|true` → enable resolver
-- `YTDLP_PATH=...` → explicit path to `yt-dlp`
-- `FFMPEG_PATH=...` → explicit path to `ffmpeg`
+- `FFMPEG_PATH=...` → explicit path or command name for `ffmpeg` (overrides the bundled auto-downloaded binary)
 - `RESOLVE_TIMEOUT_MS=...` → override timeout
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` → fallback env vars if `[spotify]` section is omitted.
 	- You can also set custom env var names and reference them from the config, e.g.: `client_id = "MY_APP_SPOTIFY_ID"` and then set `MY_APP_SPOTIFY_ID` in your `.env` or environment.
-- (legacy) `RESONIX_EMBED_EXTRACT_DIR` is ignored now; tools are stored in `~/.resonix/bin`
-	(runtime export `RESONIX_TOOLS_DIR` shows the resolved directory)
-
-Runtime export (informational)
-- On startup the resolved paths are placed into `RESONIX_YTDLP_BIN` / `RESONIX_FFMPEG_BIN` env vars for child processes spawned by the node. Normally you do not need to set these manually.
-
-### Tool management (yt-dlp / ffmpeg)
-
-On startup Resonix checks for `yt-dlp` and `ffmpeg`.
-
-Resolution order (per tool):
-1. Explicit env (`YTDLP_PATH` / `FFMPEG_PATH`)
-2. Config (`resolver.ytdlp_path` / `resolver.ffmpeg_path`)
-3. Auto-managed download to `~/.resonix/bin` (created if missing)
-
-If only one tool is missing, only that one is downloaded. Existing executables are left untouched. Delete a file to force re-download of the latest release.
-
-macOS: `ffmpeg` is not auto-downloaded (install via Homebrew: `brew install ffmpeg`).
-
 Notes
-- The resolver downloads temporary audio files using `yt-dlp`. Ensure sufficient disk space and legal use in your jurisdiction.
-- For sources needing remux/extraction, `ffmpeg` is required.
- - Cleanup: If loop mode is not enabled (neither `track` nor `queue`), Resonix deletes any temporary audio file it created for the finished track. On process shutdown, Resonix also best‑effort removes leftover temp files with the `resonix_` prefix from the OS temp directory.
+- The resolver obtains direct stream URLs via Riva. Ensure you comply with the target platform's terms of service.
+- Cleanup: If loop mode is not enabled (neither `track` nor `queue`), Resonix deletes any temporary audio file it created for the finished track. On process shutdown, Resonix also best‑effort removes leftover temp files with the `resonix_` prefix from the OS temp directory.
 
----
+### ffmpeg requirement
 
-## Example client
-
-See [examples/discord-js-bot](./examples/discord-js-bot) for a minimal Discord.js bot that connects to the node over WebSocket and plays a URL.
+The node shells out to `ffmpeg` for every track and streams raw PCM from its stdout. Provide a path via `resolver.ffmpeg_path` in the config or the `FFMPEG_PATH` env variable. On startup Resonix runs `ffmpeg -version`; if the command is missing it automatically downloads the latest build from <https://github.com/BtbN/FFmpeg-Builds/releases> into `~/.resonix/bin/ffmpeg` (or `%USERPROFILE%\.resonix\bin\ffmpeg.exe`) and switches to it. If the download fails or your platform is unsupported, Resonix exits with an error so you can install `ffmpeg` manually.
 
 ---
 
@@ -146,7 +121,7 @@ See [examples/discord-js-bot](./examples/discord-js-bot) for a minimal Discord.j
 
 Prereqs
 - Rust toolchain, `cargo`
-- Optional: `yt-dlp` in PATH for resolver; `ffmpeg` recommended (used by yt-dlp to extract consistent audio formats)
+- `ffmpeg` accessible on the PATH (Resonix auto-downloads a Linux/Windows build if none is found)
 
 Common tasks
 - Format: `cargo fmt` (configured via `rustfmt.toml`)

@@ -22,7 +22,7 @@ fn main() {
 
         let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
         res.set("CompanyName", &company);
-        res.set("FileDescription", "High-performance audio node");
+        res.set("FileDescription", "High-performance relay-based audio node");
         res.set("ProductName", &product);
         res.set("ProductVersion", &version);
         res.set("FileVersion", &version);

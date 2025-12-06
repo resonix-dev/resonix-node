@@ -1,11 +1,21 @@
-use crate::utils::enc::encrypt_file_in_place;
 use anyhow::{anyhow, Context, Result};
+use once_cell::sync::Lazy;
+use regex::Regex;
+use reqwest::Client;
+use riva::soundcloud;
+use riva::youtube;
 use rspotify::{model::TrackId, prelude::BaseClient, ClientCredsSpotify, Credentials};
 use serde::Deserialize;
-use tokio::process::Command;
-use url::Url;
+use std::time::Duration;
+use url::{form_urlencoded, Url};
 
 use crate::config::EffectiveConfig;
+
+const YT_SEARCH_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Resonix/0.3";
+const MIN_RESOLVE_TIMEOUT_MS: u64 = 1_000;
+
+static YT_VIDEO_ID_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\"videoId\":\"([A-Za-z0-9_-]{11})\""#).expect("valid video id regex"));
 
 fn host(url: &str) -> Option<String> {
     Url::parse(url).ok().and_then(|u| u.host_str().map(|h| h.to_lowercase()))
@@ -24,6 +34,9 @@ pub fn is_uri_allowed(cfg: &EffectiveConfig, uri: &str) -> bool {
 }
 
 pub fn needs_resolve(input: &str) -> bool {
+    if parse_ytsearch_query(input).is_some() {
+        return true;
+    }
     if let Some(h) = host(input) {
         return h.contains("youtube.com")
             || h == "youtu.be"
@@ -34,106 +47,18 @@ pub fn needs_resolve(input: &str) -> bool {
 }
 
 pub async fn resolve_to_direct(cfg: &EffectiveConfig, input: &str) -> Result<String> {
+    if let Some(query) = parse_ytsearch_query(input) {
+        return resolve_youtube_search(cfg, &query).await;
+    }
     if let Some(h) = host(input) {
         if h.contains("youtube.com") || h == "youtu.be" {
-            if let Ok(path) =
-                download_with_ytdlp_to_temp(cfg, input, &cfg.preferred_format, Some(".m4a")).await
-            {
-                return Ok(path);
-            }
-            if let Ok(path) =
-                download_with_ytdlp_to_temp(cfg, input, "bestaudio[ext=m4a]/bestaudio/best", Some(".m4a"))
-                    .await
-            {
-                return Ok(path);
-            }
-            anyhow::bail!("Failed to download YouTube audio");
+            return resolve_youtube_url(cfg, input).await;
         }
         if h.contains("soundcloud.com") {
-            if let Ok(path) = download_with_ytdlp_mp3(cfg, input).await {
-                return Ok(path);
-            }
-            if let Ok(url) = run_yt_dlp(cfg, &["--no-playlist", "-g", input]).await {
-                if !url.is_empty() {
-                    return Ok(url);
-                }
-            }
-            anyhow::bail!("Failed to resolve SoundCloud URL");
+            return resolve_soundcloud_url(cfg, input).await;
         }
         if h.contains("spotify.com") {
-            if cfg_spotify_creds(cfg).is_none() {
-                anyhow::bail!(
-                    "Spotify URL provided but credentials are missing. Provide SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET or configure them in Resonix.toml."
-                );
-            }
-            if let Some(url_track_id) = parse_spotify_track_id(input) {
-                if let Some((client_id, client_secret)) = cfg_spotify_creds(cfg) {
-                    if let Ok((title, artists)) =
-                        fetch_spotify_track_metadata(&client_id, &client_secret, &url_track_id).await
-                    {
-                        let artist_joined =
-                            if artists.is_empty() { String::new() } else { artists.join(", ") + " - " };
-                        let query = format!("ytsearch1:{}{}", artist_joined, title);
-                        if let Ok(path) =
-                            download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a"))
-                                .await
-                        {
-                            return Ok(path);
-                        }
-                        if let Ok(path) = download_with_ytdlp_to_temp(
-                            cfg,
-                            &query,
-                            "bestaudio[ext=m4a]/bestaudio/best",
-                            Some(".m4a"),
-                        )
-                        .await
-                        {
-                            return Ok(path);
-                        }
-                    }
-                }
-            }
-
-            if let Ok(title) = fetch_spotify_oembed_title(input).await {
-                let query = format!("ytsearch1:{}", title);
-                if let Ok(path) =
-                    download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a")).await
-                {
-                    return Ok(path);
-                }
-                if let Ok(path) = download_with_ytdlp_to_temp(
-                    cfg,
-                    &query,
-                    "bestaudio[ext=m4a]/bestaudio/best",
-                    Some(".m4a"),
-                )
-                .await
-                {
-                    return Ok(path);
-                }
-            }
-
-            if cfg.allow_spotify_title_search {
-                if let Ok(title) = run_yt_dlp(cfg, &["-e", input]).await {
-                    let query = format!("ytsearch1:{}", title);
-                    if let Ok(path) =
-                        download_with_ytdlp_to_temp(cfg, &query, &cfg.preferred_format, Some(".m4a")).await
-                    {
-                        return Ok(path);
-                    }
-                    if let Ok(path) = download_with_ytdlp_to_temp(
-                        cfg,
-                        &query,
-                        "bestaudio[ext=m4a]/bestaudio/best",
-                        Some(".m4a"),
-                    )
-                    .await
-                    {
-                        return Ok(path);
-                    }
-                }
-            }
-            anyhow::bail!("Failed to resolve Spotify URL");
+            return resolve_spotify_link(cfg, input).await;
         }
     }
 
@@ -147,7 +72,10 @@ pub async fn resolve_with_retry(cfg: &EffectiveConfig, input: &str) -> Result<St
             Ok(s) => return Ok(s),
             Err(e) => {
                 let em = e.to_string();
-                if em.contains("probe") || em.contains("ffmpeg") || em.contains("unsupported feature") {
+                if em.contains("probe")
+                    || em.contains("unsupported feature")
+                    || em.contains("unsupported codec")
+                {
                     last_err = Some(e);
                     let delay_ms = 250 * attempt;
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -161,86 +89,105 @@ pub async fn resolve_with_retry(cfg: &EffectiveConfig, input: &str) -> Result<St
     Err(last_err.unwrap_or_else(|| anyhow!("resolve failed after retries")))
 }
 
-async fn run_yt_dlp(cfg: &EffectiveConfig, args: &[&str]) -> Result<String> {
-    let bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
-    let mut cmd = Command::new(bin);
-    cmd.args(args);
-    cmd.stderr(std::process::Stdio::null());
-    let timeout_ms: u64 = cfg.resolve_timeout_ms;
-    let out = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
-        let out = cmd.output().await?;
-        anyhow::Ok(out)
-    })
-    .await??;
-    if out.status.success() {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok(s)
+async fn resolve_youtube_url(_cfg: &EffectiveConfig, url: &str) -> Result<String> {
+    let streams =
+        youtube::extract_streams(url).await.map_err(|e| anyhow!("youtube extraction failed: {e}"))?;
+    let first = streams.first().ok_or_else(|| anyhow!("no playable youtube streams"))?;
+    Ok(first.url.clone())
+}
+
+async fn resolve_youtube_search(cfg: &EffectiveConfig, query: &str) -> Result<String> {
+    let video_id = search_youtube_video_id(cfg, query).await?;
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
+    resolve_youtube_url(cfg, &url).await
+}
+
+async fn search_youtube_video_id(cfg: &EffectiveConfig, query: &str) -> Result<String> {
+    let client = youtube_search_client(cfg)?;
+    let encoded: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    let url = format!("https://www.youtube.com/results?search_query={encoded}");
+    let body = client
+        .get(&url)
+        .send()
+        .await
+        .context("youtube search request failed")?
+        .error_for_status()
+        .context("youtube search returned error status")?
+        .text()
+        .await
+        .context("youtube search body read failed")?;
+
+    let caps = YT_VIDEO_ID_REGEX
+        .captures(&body)
+        .ok_or_else(|| anyhow!("youtube search did not return any video ids"))?;
+    Ok(caps.get(1).map(|m| m.as_str()).unwrap_or_default().to_string())
+}
+
+async fn resolve_soundcloud_url(_cfg: &EffectiveConfig, url: &str) -> Result<String> {
+    let streams =
+        soundcloud::extract_streams(url).await.map_err(|e| anyhow!("soundcloud extraction failed: {e}"))?;
+    let first = streams.first().ok_or_else(|| anyhow!("no playable soundcloud streams"))?;
+    Ok(first.url.clone())
+}
+
+async fn resolve_spotify_link(cfg: &EffectiveConfig, input: &str) -> Result<String> {
+    if cfg_spotify_creds(cfg).is_none() {
+        anyhow::bail!(
+            "Spotify URL provided but credentials are missing. Provide SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET or configure them in Resonix.toml."
+        );
+    }
+
+    if let Some(track_id) = parse_spotify_track_id(input) {
+        if let Some((client_id, client_secret)) = cfg_spotify_creds(cfg) {
+            if let Ok((title, artists)) =
+                fetch_spotify_track_metadata(&client_id, &client_secret, &track_id).await
+            {
+                let mut query = title.clone();
+                if !artists.is_empty() {
+                    query = format!("{} - {}", artists.join(", "), title);
+                }
+                if let Ok(url) = resolve_youtube_search(cfg, &query).await {
+                    return Ok(url);
+                }
+            }
+        }
+    }
+
+    if cfg.allow_spotify_title_search {
+        if let Ok(title) = fetch_spotify_oembed_title(input).await {
+            if let Ok(url) = resolve_youtube_search(cfg, &title).await {
+                return Ok(url);
+            }
+        }
+    }
+
+    anyhow::bail!("Failed to resolve Spotify URL")
+}
+
+fn parse_ytsearch_query(input: &str) -> Option<String> {
+    let idx = input.find(':')?;
+    let prefix = &input[..idx];
+    if !prefix.to_ascii_lowercase().starts_with("ytsearch") {
+        return None;
+    }
+    let query = input[idx + 1..].trim();
+    if query.is_empty() {
+        None
     } else {
-        let e = String::from_utf8_lossy(&out.stderr);
-        anyhow::bail!("yt-dlp failed: {}", e)
+        Some(query.to_string())
     }
 }
 
-pub async fn download_with_ytdlp_to_temp(
-    cfg: &EffectiveConfig,
-    input: &str,
-    format: &str,
-    suffix: Option<&str>,
-) -> Result<String> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("resonix_");
-    if let Some(suf) = suffix {
-        builder.suffix(suf);
-    }
-    let file = builder.tempfile()?;
-    let path = file.path().to_path_buf();
-    drop(file);
-
-    let out_path = path.to_string_lossy().to_string();
-
-    let ytdlp_bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
-    let mut cmd = Command::new(&ytdlp_bin);
-    cmd.arg("--no-playlist").arg("-f").arg(format).arg("-o").arg(&out_path).arg(input);
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
-    let status = cmd.status().await.context("run yt-dlp to download")?;
-    if !status.success() {
-        anyhow::bail!("yt-dlp download failed with status {status}");
-    }
-
-    let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded file")?;
-    if meta.len() == 0 {
-        anyhow::bail!("yt-dlp created empty file");
-    }
-    encrypt_file_in_place(std::path::Path::new(&out_path)).context("encrypt ytdlp temp file")?;
-    Ok(out_path)
+fn youtube_search_client(cfg: &EffectiveConfig) -> Result<Client> {
+    Client::builder()
+        .user_agent(YT_SEARCH_UA)
+        .timeout(resolver_timeout(cfg))
+        .build()
+        .context("build youtube search client")
 }
 
-async fn download_with_ytdlp_mp3(cfg: &EffectiveConfig, input: &str) -> Result<String> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("resonix_").suffix(".mp3");
-    let file = builder.tempfile()?;
-    let path = file.path().to_path_buf();
-    drop(file);
-
-    let out_path = path.to_string_lossy().to_string();
-
-    let ytdlp_bin = std::env::var("RESONIX_YTDLP_BIN").unwrap_or_else(|_| cfg.ytdlp_path.clone());
-    let mut cmd = Command::new(&ytdlp_bin);
-    cmd.args(["--no-playlist", "-x", "--audio-format", "mp3", "-o"]).arg(&out_path).arg(input);
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
-    let status = cmd.status().await.context("run yt-dlp to download/extract mp3")?;
-    if !status.success() {
-        anyhow::bail!("yt-dlp mp3 extraction failed with status {status}");
-    }
-
-    let meta = tokio::fs::metadata(&out_path).await.context("stat downloaded mp3")?;
-    if meta.len() == 0 {
-        anyhow::bail!("yt-dlp created empty mp3 file");
-    }
-    encrypt_file_in_place(std::path::Path::new(&out_path)).context("encrypt ytdlp mp3 temp file")?;
-    Ok(out_path)
+fn resolver_timeout(cfg: &EffectiveConfig) -> Duration {
+    Duration::from_millis(cfg.resolve_timeout_ms.max(MIN_RESOLVE_TIMEOUT_MS))
 }
 
 fn cfg_spotify_creds(cfg: &EffectiveConfig) -> Option<(String, String)> {

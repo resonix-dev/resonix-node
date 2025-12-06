@@ -1,16 +1,20 @@
 use crate::audio::{
-    decoder::SymphoniaDecoder,
+    decoder::FfmpegDecoder,
     dsp::{biquad_eq_in_place, update_eq_filters, Filters},
-    source::{is_resonix_temp_file, prepare_local_source, transcode_to_mp3},
+    source::{is_resonix_temp_file, prepare_local_source},
     track::{LoopMode, TrackItem},
 };
 use crate::config::EffectiveConfig;
 use anyhow::Result;
 use bytes::Bytes;
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::{broadcast, Mutex};
-use tracing::warn;
-
+use tokio::sync::{broadcast, Mutex, Notify};
+use tracing::info;
+async fn cleanup_temp_paths(paths: &mut Vec<PathBuf>) {
+    for p in paths.drain(..) {
+        let _ = tokio::fs::remove_file(p).await;
+    }
+}
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct EqBandParam {
     pub band: u8,
@@ -45,6 +49,7 @@ pub struct Player {
     loop_mode: Arc<Mutex<LoopMode>>,
     event_tx: broadcast::Sender<PlayerEvent>,
     cfg: std::sync::Arc<EffectiveConfig>,
+    queue_notify: Arc<Notify>,
 }
 
 impl Player {
@@ -70,6 +75,7 @@ impl Player {
             loop_mode: Arc::new(Mutex::new(LoopMode::None)),
             event_tx,
             cfg,
+            queue_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -105,100 +111,11 @@ impl Player {
             }
             let _ =
                 self.event_tx.send(PlayerEvent::TrackStart { id: self.id.clone(), uri: current_uri.clone() });
-            let mut actual_source = source_path.clone();
-            let mut decoder = match SymphoniaDecoder::open(&actual_source) {
+            let mut decoder = match FfmpegDecoder::open(&source_path, &self.cfg.ffmpeg_path) {
                 Ok(d) => d,
                 Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("unsupported codec") || msg.contains("unsupported feature") {
-                        warn!(%msg, "ffmpeg fallback");
-                        match transcode_to_mp3(&actual_source).await {
-                            Ok(mp3) => {
-                                temp_paths.push(mp3.clone());
-                                match SymphoniaDecoder::open(&mp3) {
-                                    Ok(d) => d,
-                                    Err(e2) => {
-                                        let _ = e2;
-
-                                        for p in temp_paths.drain(..) {
-                                            let _ = tokio::fs::remove_file(p).await;
-                                        }
-                                        if crate::config::resolver_enabled(&self.cfg) {
-                                            if let Ok(new_uri) =
-                                                crate::resolver::resolve_with_retry(&self.cfg, &current_uri)
-                                                    .await
-                                            {
-                                                actual_source = prepare_local_source(&new_uri).await?;
-                                                if is_resonix_temp_file(&actual_source) {
-                                                    temp_paths.push(actual_source.clone());
-                                                }
-                                                match SymphoniaDecoder::open(&actual_source) {
-                                                    Ok(d3) => d3,
-                                                    Err(e3) => {
-                                                        let m3 = e3.to_string();
-                                                        if m3.contains("unsupported codec")
-                                                            || m3.contains("unsupported feature")
-                                                        {
-                                                            let mp3b =
-                                                                transcode_to_mp3(&actual_source).await?;
-                                                            temp_paths.push(mp3b.clone());
-                                                            SymphoniaDecoder::open(&mp3b)?
-                                                        } else {
-                                                            return Err(e3);
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                return Err(anyhow::anyhow!(
-                                                    "resolve retry failed after ffmpeg error"
-                                                ));
-                                            }
-                                        } else {
-                                            return Err(anyhow::anyhow!(
-                                                "decoder fallback failed and resolver disabled"
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e_ff) => {
-                                for p in temp_paths.drain(..) {
-                                    let _ = tokio::fs::remove_file(p).await;
-                                }
-                                if crate::config::resolver_enabled(&self.cfg) {
-                                    if let Ok(new_uri) =
-                                        crate::resolver::resolve_with_retry(&self.cfg, &current_uri).await
-                                    {
-                                        actual_source = prepare_local_source(&new_uri).await?;
-                                        if is_resonix_temp_file(&actual_source) {
-                                            temp_paths.push(actual_source.clone());
-                                        }
-                                        match SymphoniaDecoder::open(&actual_source) {
-                                            Ok(d3) => d3,
-                                            Err(e3) => {
-                                                let m3 = e3.to_string();
-                                                if m3.contains("unsupported codec")
-                                                    || m3.contains("unsupported feature")
-                                                {
-                                                    let mp3b = transcode_to_mp3(&actual_source).await?;
-                                                    temp_paths.push(mp3b.clone());
-                                                    SymphoniaDecoder::open(&mp3b)?
-                                                } else {
-                                                    return Err(e3);
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        return Err(e_ff);
-                                    }
-                                } else {
-                                    return Err(e_ff);
-                                }
-                            }
-                        }
-                    } else {
-                        return Err(e);
-                    }
+                    cleanup_temp_paths(&mut temp_paths).await;
+                    return Err(e);
                 }
             };
             {
@@ -280,16 +197,24 @@ impl Player {
 
             let loop_mode = *self.loop_mode.lock().await;
             if matches!(loop_mode, LoopMode::None) {
-                for p in temp_paths {
-                    let _ = tokio::fs::remove_file(p).await;
-                }
+                cleanup_temp_paths(&mut temp_paths).await;
             }
             if let Some((next_uri, next_prepared)) = self.next_track(skipped).await {
+                info!(player=%self.id, %next_uri, "advancing to queued track");
                 current_uri = next_uri;
                 current_prepared = next_prepared.map(PathBuf::from);
                 continue;
             } else {
-                break 'session;
+                info!(player=%self.id, "queue empty, waiting for next track");
+                match self.wait_for_next_track().await {
+                    Some((next_uri, next_prepared)) => {
+                        info!(player=%self.id, %next_uri, "received deferred queue track");
+                        current_uri = next_uri;
+                        current_prepared = next_prepared.map(PathBuf::from);
+                        continue;
+                    }
+                    None => break 'session,
+                }
             }
         }
         Ok(())
@@ -382,7 +307,9 @@ impl Player {
         let item = TrackItem::new_with_prepared(&uri, prepared_path, metadata);
         let id = item.id.clone();
         q.push(item);
+        info!(player=%self.id, queue_len=q.len(), %uri, "track enqueued");
         let _ = self.event_tx.send(PlayerEvent::QueueUpdate);
+        self.queue_notify.notify_one();
         id
     }
     pub async fn set_loop_mode(&self, mode: LoopMode) {
@@ -415,6 +342,30 @@ impl Player {
     }
     pub async fn queue_snapshot(&self) -> Vec<TrackItem> {
         self.queue.lock().await.clone()
+    }
+
+    async fn wait_for_next_track(&self) -> Option<(String, Option<String>)> {
+        loop {
+            if let Some(next) = self.dequeue_pending_track().await {
+                return Some(next);
+            }
+            let notified = self.queue_notify.notified();
+            let mut stop_rx = self.ctrl.stop_tx.subscribe();
+            tokio::select! {
+                _ = notified => continue,
+                _ = stop_rx.recv() => return None,
+            }
+        }
+    }
+
+    async fn dequeue_pending_track(&self) -> Option<(String, Option<String>)> {
+        let mut q = self.queue.lock().await;
+        if q.is_empty() {
+            None
+        } else {
+            let item = q.remove(0);
+            Some((item.uri, item.prepared_path))
+        }
     }
 }
 

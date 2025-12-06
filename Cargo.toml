@@ -2,13 +2,12 @@
 name = "resonix-node"
 version = "0.3.0"
 edition = "2021"
-description = "High-performance audio node. HTTP/WebSocket server that resolves and streams audio using Symphonia and yt-dlp."
+description = "High-performance relay-based audio node. HTTP/WebSocket server that resolves and streams audio using ffmpeg and Riva."
 license = "BSD-3-Clause"
-repository = "https://github.com/lumixland/Resonix"
-homepage = "https://github.com/lumixland/Resonix"
-documentation = "https://docs.rs/resonix-node"
+repository = "https://github.com/resonix-dev/resonix"
+homepage = "https://github.com/resonix-dev/resonix"
 readme = "README.md"
-keywords = ["audio", "discord", "streaming", "yt-dlp", "symphonia"]
+keywords = ["audio", "discord", "streaming", "riva", "ffmpeg"]
 categories = ["audio", "multimedia", "network-programming", "web-programming::http-server"]
 rust-version = "1.74"
 build = "build.rs"
@@ -18,7 +17,7 @@ anyhow = "1.0.99"
 thiserror = "2.0.16"
 bytes = "1"
 axum = { version = "0.8", features = ["ws", "macros"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "process", "fs"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.143"
@@ -33,22 +32,6 @@ ctrlc = "3"
 bytemuck = "1.23.2"
 reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls", "stream"] }
 tempfile = "3.21.0"
-symphonia = { version = "0.5", features = [
-  "aac",
-  "mp3",
-  "flac",
-  "vorbis",
-  "isomp4",
-  "ogg",
-  "mkv",
-  "wav",
-  "alac"
-] }
-rustube = { version = "0.6", default-features = false, features = [
-  "download",
-  "std",
-  "rustls-tls",
-] }
 toml = "0.9"
 rspotify = { version = "0.15.1", default-features = false, features = [
   "client-reqwest",
@@ -57,11 +40,11 @@ rspotify = { version = "0.15.1", default-features = false, features = [
 dotenvy = "0.15"
 base64 = "0.22"
 uuid = { version = "1.18.1", features = ["v4"] }
-zip = "0.4"
+riva = "0.1.0"
+once_cell = "1.20"
 tar = "0.4"
 xz2 = "0.1"
-chacha20poly1305 = "0.10"
-rand = "0.9"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [badges]
 docsrs = {}

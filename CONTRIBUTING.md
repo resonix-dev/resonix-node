@@ -8,7 +8,7 @@ Thanks for your interest in contributing!
 
 ## Development setup
 - Install Rust (stable) and `cargo`.
-- Optional: `yt-dlp` in PATH if you want; otherwise the node will auto-download tools to `~/.resonix/bin` on first run.
+- Install `ffmpeg` and ensure it is on PATH (or set `FFMPEG_PATH`).
 - Build: `cargo build` | Format: `cargo fmt`
 
 ## Coding guidelines

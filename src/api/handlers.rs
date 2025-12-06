@@ -262,20 +262,23 @@ pub async fn enqueue(
         return Err(StatusCode::FORBIDDEN);
     }
     let md = req.metadata.unwrap_or_else(|| serde_json::json!({}));
+    let mut uri = req.uri.clone();
     let mut prepared_path: Option<String> = None;
-    if needs_resolve(&req.uri) && crate::config::resolver_enabled(&state.cfg) {
-        match resolve_with_retry(&state.cfg, &req.uri).await {
-            Ok(res) => {
-                if std::path::Path::new(&res).exists() {
-                    prepared_path = Some(res);
+    if (needs_resolve(&uri) && resolver_enabled(&state.cfg)) || resolver_enabled(&state.cfg) {
+        match resolve_with_retry(&state.cfg, &uri).await {
+            Ok(direct) => {
+                info!(original=%req.uri, %direct, "resolved queue URL to direct stream");
+                if std::path::Path::new(&direct).exists() {
+                    prepared_path = Some(direct.clone());
                 }
+                uri = direct;
             }
             Err(e) => {
-                tracing::warn!(uri=%req.uri, ?e, "prefetch resolve failed; enqueued without prepared path");
+                warn!(uri=%req.uri, ?e, "resolver failed; enqueued original URI");
             }
         }
     }
-    let track_id = p.enqueue_prepared(req.uri.clone(), prepared_path, md).await;
+    let track_id = p.enqueue_prepared(uri, prepared_path, md).await;
     Ok((StatusCode::CREATED, Json(serde_json::json!({"trackId": track_id}))))
 }
 

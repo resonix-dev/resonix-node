@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use axum::{
     routing::{delete, get, patch, post},
     Router,
@@ -26,8 +26,7 @@ use crate::api::handlers::{
 use crate::config::load_config;
 use crate::middleware::auth::auth_middleware;
 use crate::state::AppState;
-use crate::utils::stdu::format_ram_mb;
-use crate::utils::tools::{ensure_all, tools_home_dir};
+use crate::utils::{ffmpeg, stdu::format_ram_mb};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -42,7 +41,7 @@ async fn main() -> Result<()> {
         }
         crate::cli::CliAction::RunServer => { /* continue */ }
     }
-    let cfg = load_config();
+    let mut cfg = load_config();
     let logs_dir_str = std::env::var("RESONIX_LOG_DIR").unwrap_or_else(|_| ".logs".into());
     let logs_dir = std::path::Path::new(&logs_dir_str);
 
@@ -71,8 +70,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Err(e) = check_startup_dependencies(&cfg).await {
-        error!(?e, "Dependency check failed");
+    if let Err(e) = ensure_ffmpeg_available(&mut cfg).await {
+        error!(?e, path = %cfg.ffmpeg_path, "ffmpeg missing or unusable");
         std::process::exit(1);
     }
 
@@ -142,75 +141,49 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn check_startup_dependencies(cfg: &crate::config::EffectiveConfig) -> Result<()> {
-    use tokio::process::Command;
-    use tokio::time::{timeout, Duration};
-    let mut ytdlp_path = cfg.ytdlp_path.clone();
-    let mut ffmpeg_path = cfg.ffmpeg_path.clone();
+async fn ensure_ffmpeg_available(cfg: &mut crate::config::EffectiveConfig) -> Result<()> {
+    if check_ffmpeg(&cfg.ffmpeg_path).await.is_ok() {
+        return Ok(());
+    }
 
-    async fn validate(bin: &str, arg: &str) -> bool {
-        let mut cmd = Command::new(bin);
-        cmd.arg(arg).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        match timeout(Duration::from_secs(5), cmd.status()).await {
-            Ok(Ok(st)) => st.success(),
-            _ => false,
+    warn!(path = %cfg.ffmpeg_path, "Configured ffmpeg binary is not available; attempting automatic install");
+
+    let fallback_path = ffmpeg::default_ffmpeg_binary_path()?;
+    if std::path::Path::new(&cfg.ffmpeg_path) != fallback_path.as_path() {
+        let fallback_path_str = fallback_path.to_string_lossy().into_owned();
+        if check_ffmpeg(&fallback_path_str).await.is_ok() {
+            cfg.ffmpeg_path = fallback_path_str;
+            info!(path = %cfg.ffmpeg_path, "Using bundled ffmpeg binary");
+            return Ok(());
         }
     }
 
-    let need_ytdlp_download = !validate(&ytdlp_path, "--version").await;
-    let need_ffmpeg_download = !validate(&ffmpeg_path, "-version").await;
+    let downloaded_path = ffmpeg::download_latest_ffmpeg().await?;
+    cfg.ffmpeg_path = downloaded_path.to_string_lossy().into_owned();
+    check_ffmpeg(&cfg.ffmpeg_path).await?;
+    info!(path = %cfg.ffmpeg_path, "Downloaded ffmpeg binary");
 
-    if need_ytdlp_download || need_ffmpeg_download {
-        let (ytdlp_dl, ffmpeg_dl) = ensure_all(need_ytdlp_download, need_ffmpeg_download).await?;
-        if let Some(p) = ytdlp_dl {
-            ytdlp_path = p.to_string_lossy().to_string();
-        }
-        if let Some(p) = ffmpeg_dl {
-            ffmpeg_path = p.to_string_lossy().to_string();
-        }
-    }
-
-    let ytdlp_ok = validate(&ytdlp_path, "--version").await;
-    if !ytdlp_ok {
-        log_install_help("yt-dlp");
-        anyhow::bail!("yt-dlp missing; attempted path {}", ytdlp_path);
-    }
-    let ffmpeg_ok = validate(&ffmpeg_path, "-version").await;
-    if !ffmpeg_ok {
-        log_install_help("ffmpeg");
-        anyhow::bail!("ffmpeg missing; attempted path {}", ffmpeg_path);
-    }
-
-    std::env::set_var("RESONIX_FFMPEG_BIN", &ffmpeg_path);
-    std::env::set_var("RESONIX_YTDLP_BIN", &ytdlp_path);
-    std::env::set_var("RESONIX_TOOLS_DIR", tools_home_dir());
     Ok(())
 }
 
-fn log_install_help(tool: &str) {
-    if cfg!(target_os = "windows") {
-        error!(
-            %tool,
-            "Required dependency '{}' is missing. Install it with winget or Chocolatey and ensure it's in PATH.\nwinget (recommended): winget install -e --id {}\nChocolatey: choco install {}",
-            tool,
-            match tool { "yt-dlp" => "yt-dlp.yt-dlp", "ffmpeg" => "Gyan.FFmpeg", _ => tool },
-            tool
-        );
-    } else if cfg!(target_os = "macos") {
-        error!(
-            %tool,
-            "Required dependency '{}' is missing. Install it via Homebrew.\nbrew install {}",
-            tool,
-            tool
-        );
-    } else {
-        error!(
-            %tool,
-            "Required dependency '{}' is missing. Install it via your package manager.\nDebian/Ubuntu: sudo apt update && sudo apt install -y {}\nArch: sudo pacman -S {}\nFedora: sudo dnf install -y {}",
-            tool,
-            tool,
-            tool,
-            tool
-        );
+async fn check_ffmpeg(path: &str) -> Result<()> {
+    use tokio::process::Command;
+    use tokio::time::{timeout, Duration};
+
+    let status = timeout(
+        Duration::from_secs(5),
+        Command::new(path)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("ffmpeg check timed out"))??;
+
+    if !status.success() {
+        bail!("ffmpeg command '{}' exited with status {}", path, status);
     }
+
+    Ok(())
 }

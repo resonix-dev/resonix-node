@@ -56,13 +56,9 @@ pub struct ResolverConfig {
     #[serde(default = "default_resolver_enabled")]
     pub enabled: bool,
     #[serde(default)]
-    pub ytdlp_path: Option<String>,
-    #[serde(default)]
     pub ffmpeg_path: Option<String>,
     #[serde(default = "default_resolve_timeout")]
     pub timeout_ms: u64,
-    #[serde(default = "default_preferred_format")]
-    pub preferred_format: String,
     #[serde(default = "default_allow_spotify_title_search")]
     pub allow_spotify_title_search: bool,
 }
@@ -72,9 +68,6 @@ fn default_resolver_enabled() -> bool {
 fn default_resolve_timeout() -> u64 {
     20_000
 }
-fn default_preferred_format() -> String {
-    "140".into()
-}
 fn default_allow_spotify_title_search() -> bool {
     true
 }
@@ -82,10 +75,8 @@ impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
             enabled: default_resolver_enabled(),
-            ytdlp_path: None,
             ffmpeg_path: None,
             timeout_ms: default_resolve_timeout(),
-            preferred_format: default_preferred_format(),
             allow_spotify_title_search: default_allow_spotify_title_search(),
         }
     }
@@ -113,10 +104,8 @@ pub struct EffectiveConfig {
     pub port: u16,
     pub clean_log_on_start: bool,
     pub resolver_enabled: bool,
-    pub ytdlp_path: String,
     pub ffmpeg_path: String,
     pub resolve_timeout_ms: u64,
-    pub preferred_format: String,
     pub allow_spotify_title_search: bool,
     pub allow_patterns: Vec<Regex>,
     pub block_patterns: Vec<Regex>,
@@ -140,15 +129,13 @@ port = 2333
 clean_log_on_start = true
 
 [resolver]
-# Enable resolver/downloader for non-direct sources (YouTube/Spotify). Default: false
+# Enable resolver for non-direct sources (YouTube/SoundCloud/Spotify). Default: false
 enabled = true
-# Optional custom path to yt-dlp executable. Default: "yt-dlp"
-ytdlp_path = "yt-dlp"
+# Path or command name for ffmpeg. Default: "ffmpeg" (can reference env via FFMPEG_PATH)
+# ffmpeg_path = "ffmpeg"
 # Timeout for resolve/download operations in milliseconds. Default: 20000
 timeout_ms = 20000
-# Preferred format code for yt-dlp (e.g. 140 = m4a). Default: "140"
-preferred_format = "140"
-# If true, Spotify URLs are resolved by title via yt-dlp's YouTube search. Default: true
+# If true, Spotify URLs are resolved by title via YouTube search fallback. Default: true
 allow_spotify_title_search = true
 
 [spotify]
@@ -204,7 +191,6 @@ pub fn load_config() -> EffectiveConfig {
 
     let resolver_env =
         std::env::var("RESONIX_RESOLVE").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-    let ytdlp_env = std::env::var("YTDLP_PATH").ok();
     let ffmpeg_env = std::env::var("FFMPEG_PATH").ok();
     let timeout_env = std::env::var("RESOLVE_TIMEOUT_MS").ok().and_then(|s| s.parse().ok());
 
@@ -229,11 +215,9 @@ pub fn load_config() -> EffectiveConfig {
         port: raw.server.port,
         clean_log_on_start: raw.logging.clean_log_on_start,
         resolver_enabled: resolver_env.unwrap_or(raw.resolver.enabled),
-        ytdlp_path: ytdlp_env.unwrap_or_else(|| raw.resolver.ytdlp_path.unwrap_or_else(|| "yt-dlp".into())),
         ffmpeg_path: ffmpeg_env
             .unwrap_or_else(|| raw.resolver.ffmpeg_path.clone().unwrap_or_else(|| "ffmpeg".into())),
         resolve_timeout_ms: timeout_env.unwrap_or(raw.resolver.timeout_ms),
-        preferred_format: raw.resolver.preferred_format,
         allow_spotify_title_search: raw.resolver.allow_spotify_title_search,
         allow_patterns,
         block_patterns,

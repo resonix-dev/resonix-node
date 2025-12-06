@@ -13,15 +13,13 @@ port = 2333
 clean_log_on_start = true
 
 [resolver]
-# Enable resolver/downloader for non-direct sources (YouTube/Spotify). Default: false
+# Enable resolver for non-direct sources (YouTube/SoundCloud/Spotify). Default: false
 enabled = true
-# Optional custom path to yt-dlp executable. Default: "yt-dlp"
-ytdlp_path = "yt-dlp"
+# Path or command used to invoke ffmpeg. Default: "ffmpeg"
+# ffmpeg_path = "ffmpeg"
 # Timeout for resolve/download operations in milliseconds. Default: 20000
 timeout_ms = 20000
-# Preferred format code for yt-dlp (e.g. 140 = m4a). Default: "140"
-preferred_format = "140"
-# If true, Spotify URLs are resolved by title via yt-dlp's YouTube search. Default: true
+# If true, Spotify URLs are resolved by title via YouTube search fallback. Default: true
 allow_spotify_title_search = true
 
 [spotify]
