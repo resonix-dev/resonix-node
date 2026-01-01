@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::{
     ffi::OsString,
     fs::File,
-    io::{self, Read, Seek},
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 use tar::Archive;
@@ -235,14 +235,14 @@ fn platform_spec() -> Result<PlatformSpec> {
     }
 }
 
-fn set_exec_perms(path: &Path) -> Result<()> {
+fn set_exec_perms(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms =
-            std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?.permissions();
+            std::fs::metadata(_path).with_context(|| format!("stat {}", _path.display()))?.permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).with_context(|| format!("set perms for {}", path.display()))?;
+        std::fs::set_permissions(_path, perms).with_context(|| format!("set perms for {}", _path.display()))?;
     }
     Ok(())
 }
