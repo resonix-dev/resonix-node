@@ -199,6 +199,13 @@ impl Player {
             if matches!(loop_mode, LoopMode::None) {
                 cleanup_temp_paths(&mut temp_paths).await;
             }
+            
+            // In Queue loop mode, add current track back to queue before getting next
+            if loop_mode == LoopMode::Queue && !skipped {
+                let metadata = self.metadata().await;
+                let _ = self.enqueue_prepared(current_uri.clone(), current_prepared.as_ref().map(|p| p.to_string_lossy().to_string()), metadata).await;
+            }
+            
             if let Some((next_uri, next_prepared)) = self.next_track(skipped).await {
                 info!(player=%self.id, %next_uri, "advancing to queued track");
                 current_uri = next_uri;
@@ -332,6 +339,7 @@ impl Player {
                 let uri = item.uri.clone();
                 let prepared = item.prepared_path.clone();
                 q.push(item);
+                info!(player=%self.id, queue_len=q.len(), %uri, "looping queue, advancing to next track");
                 Some((uri, prepared))
             }
             LoopMode::None => {
