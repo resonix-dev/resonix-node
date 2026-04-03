@@ -154,7 +154,7 @@ impl Player {
                     continue;
                 }
                 while buf.len().saturating_sub(head) < SAMPLES_PER_FRAME * 4 && !eos {
-                    match decoder.next_pcm_block()? {
+                    match decoder.next_pcm_block().await? {
                         Some(mut block) => {
                             if block.l.is_empty() {
                                 break;

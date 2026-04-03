@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Context, Result};
-use std::{
-    io::{BufReader, Read},
-    path::Path,
-    process::{Child, ChildStdout, Command, Stdio},
+use std::path::Path;
+use tokio::{
+    io::{AsyncReadExt, BufReader},
+    process::{Child, ChildStdout, Command},
 };
+use std::process::Stdio;
 
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
@@ -47,13 +48,13 @@ impl FfmpegDecoder {
         Ok(Self { child, stdout: BufReader::new(stdout), pending: Vec::new() })
     }
 
-    pub fn next_pcm_block(&mut self) -> Result<Option<PcmBlock>> {
+    pub async fn next_pcm_block(&mut self) -> Result<Option<PcmBlock>> {
         let mut raw = std::mem::take(&mut self.pending);
         raw.reserve(FRAME_BYTES);
 
         while raw.len() < FRAME_BYTES {
             let mut buf = vec![0u8; FRAME_BYTES - raw.len()];
-            match self.stdout.read(&mut buf) {
+            match self.stdout.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => raw.extend_from_slice(&buf[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -88,7 +89,7 @@ impl FfmpegDecoder {
 
 impl Drop for FfmpegDecoder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.child.start_kill();
+        let _ = self.child.try_wait();
     }
 }
