@@ -242,7 +242,8 @@ fn set_exec_perms(_path: &Path) -> Result<()> {
         let mut perms =
             std::fs::metadata(_path).with_context(|| format!("stat {}", _path.display()))?.permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(_path, perms).with_context(|| format!("set perms for {}", _path.display()))?;
+        std::fs::set_permissions(_path, perms)
+            .with_context(|| format!("set perms for {}", _path.display()))?;
     }
     Ok(())
 }

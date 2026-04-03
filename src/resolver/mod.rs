@@ -2,17 +2,17 @@ use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
-use riva::soundcloud;
-use riva::youtube;
+use riva::{RivaClient, YoutubeClientType};
 use rspotify::{model::TrackId, prelude::BaseClient, ClientCredsSpotify, Credentials};
 use serde::Deserialize;
-use std::time::Duration;
+use std::{io::Write, time::Duration};
 use url::{form_urlencoded, Url};
 
 use crate::config::EffectiveConfig;
 
-const YT_SEARCH_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Resonix/0.3";
+const YT_SEARCH_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Resonix/3.5";
 const MIN_RESOLVE_TIMEOUT_MS: u64 = 1_000;
+const YOUTUBE_FALLBACK_ITAG: u32 = 18;
 
 static YT_VIDEO_ID_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"\"videoId\":\"([A-Za-z0-9_-]{11})\""#).expect("valid video id regex"));
@@ -90,10 +90,16 @@ pub async fn resolve_with_retry(cfg: &EffectiveConfig, input: &str) -> Result<St
 }
 
 async fn resolve_youtube_url(_cfg: &EffectiveConfig, url: &str) -> Result<String> {
-    let streams =
-        youtube::extract_streams(url).await.map_err(|e| anyhow!("youtube extraction failed: {e}"))?;
-    let first = streams.first().ok_or_else(|| anyhow!("no playable youtube streams"))?;
-    Ok(first.url.clone())
+    let video_id = parse_youtube_video_id(url).ok_or_else(|| anyhow!("invalid youtube url"))?;
+    tracing::info!(video_id, "Resolved YouTube video ID");
+    let client = riva_client()?;
+    let response = client
+        .youtube_stream(&video_id, YOUTUBE_FALLBACK_ITAG, Some(YoutubeClientType::Android))
+        .await
+        .map_err(|e| anyhow!("youtube stream failed: {e}"))?;
+
+    let body = response.bytes().await.context("youtube stream read body failed")?;
+    write_bytes_to_temp_file(&body)
 }
 
 async fn resolve_youtube_search(cfg: &EffectiveConfig, query: &str) -> Result<String> {
@@ -124,10 +130,52 @@ async fn search_youtube_video_id(cfg: &EffectiveConfig, query: &str) -> Result<S
 }
 
 async fn resolve_soundcloud_url(_cfg: &EffectiveConfig, url: &str) -> Result<String> {
-    let streams =
-        soundcloud::extract_streams(url).await.map_err(|e| anyhow!("soundcloud extraction failed: {e}"))?;
-    let first = streams.first().ok_or_else(|| anyhow!("no playable soundcloud streams"))?;
-    Ok(first.url.clone())
+    let client = riva_client()?;
+    let response =
+        client.soundcloud_stream(url).await.map_err(|e| anyhow!("soundcloud stream failed: {e}"))?;
+    let body = response.bytes().await.context("soundcloud stream read body failed")?;
+    write_bytes_to_temp_file(&body)
+}
+
+fn riva_client() -> Result<RivaClient> {
+    RivaClient::from_env().map_err(|e| anyhow!("riva client init failed: {e}"))
+}
+
+fn parse_youtube_video_id(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_lowercase();
+
+    if host == "youtu.be" {
+        return parsed.path_segments()?.find(|s| !s.is_empty()).map(|s| s.to_string());
+    }
+
+    if host.contains("youtube.com") {
+        for (k, v) in parsed.query_pairs() {
+            if k == "v" && !v.is_empty() {
+                return Some(v.into_owned());
+            }
+        }
+
+        let mut segments = parsed.path_segments()?;
+        if let Some(first) = segments.next() {
+            if first == "embed" || first == "shorts" || first == "live" {
+                if let Some(id) = segments.next() {
+                    if !id.is_empty() {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn write_bytes_to_temp_file(bytes: &[u8]) -> Result<String> {
+    let mut tmp = tempfile::Builder::new().prefix("resonix_").tempfile()?;
+    tmp.as_file_mut().write_all(bytes).context("write resolver temp file")?;
+    let path = tmp.into_temp_path().keep().context("persist resolver temp file")?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 async fn resolve_spotify_link(cfg: &EffectiveConfig, input: &str) -> Result<String> {
